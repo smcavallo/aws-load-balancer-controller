@@ -26,6 +26,10 @@ const (
 	MetricControllerTopTalkers = "controller_top_talkers"
 	// MetricQuicTargetMissingServerId tracks the total number of QUIC targets attempted to be registered without a generated server id.
 	MetricQuicTargetMissingServerId = "quic_target_missing_server_id"
+	// MetricACMCertificateImportTotal tracks ACM import attempts from Kubernetes TLS secrets, categorized by result.
+	MetricACMCertificateImportTotal = "acm_certificate_import_total"
+	// MetricACMCertificateImportDuration tracks the time spent importing a Kubernetes TLS secret into ACM.
+	MetricACMCertificateImportDuration = "acm_certificate_import_duration_seconds"
 )
 
 const (
@@ -36,6 +40,15 @@ const (
 	labelReconcileStage = "reconcile_stage"
 	labelWebhookName    = "webhook_name"
 	LabelResource       = "resource"
+	labelResult         = "result"
+)
+
+// ACM import result label values. Kept narrow on purpose so cardinality stays bounded.
+const (
+	ACMImportResultImported = "imported"
+	ACMImportResultReused   = "reused"
+	ACMImportResultRotated  = "rotated"
+	ACMImportResultError    = "error"
 )
 
 type instruments struct {
@@ -47,6 +60,8 @@ type instruments struct {
 	webhookMutationFailure        *prometheus.CounterVec
 	controllerCacheObjectCount    *prometheus.GaugeVec
 	controllerReconcileTopTalkers *prometheus.GaugeVec
+	acmCertImportTotal            *prometheus.CounterVec
+	acmCertImportDuration         *prometheus.HistogramVec
 }
 
 // newInstruments allocates and register new metrics to registerer
@@ -101,7 +116,20 @@ func newInstruments(registerer prometheus.Registerer) *instruments {
 		Help:      "Counts the number of reconciliations triggered per resource",
 	}, []string{labelController, labelNamespace, labelName})
 
-	registerer.MustRegister(podReadinessFlipSeconds, controllerReconcileErrors, controllerReconcileStageDuration, webhookValidationFailure, webhookMutationFailure, controllerCacheObjectCount, controllerReconcileTopTalkers)
+	acmCertImportTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Subsystem: metricSubsystem,
+		Name:      MetricACMCertificateImportTotal,
+		Help:      "Counts ACM certificate imports from Kubernetes TLS secrets, labelled by result (imported, reused, conflict, error).",
+	}, []string{labelNamespace, labelName, labelResult})
+
+	acmCertImportDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Subsystem: metricSubsystem,
+		Name:      MetricACMCertificateImportDuration,
+		Help:      "Latency of importing a Kubernetes TLS secret into ACM (including the lookup of any existing certificate).",
+		Buckets:   prometheus.DefBuckets,
+	}, []string{labelResult})
+
+	registerer.MustRegister(podReadinessFlipSeconds, controllerReconcileErrors, controllerReconcileStageDuration, webhookValidationFailure, webhookMutationFailure, controllerCacheObjectCount, controllerReconcileTopTalkers, acmCertImportTotal, acmCertImportDuration)
 	return &instruments{
 		podReadinessFlipSeconds:       podReadinessFlipSeconds,
 		controllerReconcileErrors:     controllerReconcileErrors,
@@ -111,5 +139,7 @@ func newInstruments(registerer prometheus.Registerer) *instruments {
 		controllerCacheObjectCount:    controllerCacheObjectCount,
 		controllerReconcileTopTalkers: controllerReconcileTopTalkers,
 		quicTargetsMissingServerId:    controllerQuicTargetMissingServerId,
+		acmCertImportTotal:            acmCertImportTotal,
+		acmCertImportDuration:         acmCertImportDuration,
 	}
 }

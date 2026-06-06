@@ -40,7 +40,7 @@ type Builder interface {
 // NewModelBuilder construct a new baseModelBuilder
 func NewModelBuilder(subnetsResolver networking.SubnetsResolver,
 	vpcInfoProvider networking.VPCInfoProvider, vpcID string, loadBalancerType elbv2model.LoadBalancerType, trackingProvider tracking.Provider,
-	elbv2TaggingManager elbv2deploy.TaggingManager, lbcConfig config.ControllerConfig, ec2Client services.EC2, elbv2Client services.ELBV2, certDiscovery certs.CertDiscovery, k8sClient client.Client, featureGates config.FeatureGates, clusterName string, defaultTags map[string]string,
+	elbv2TaggingManager elbv2deploy.TaggingManager, lbcConfig config.ControllerConfig, ec2Client services.EC2, elbv2Client services.ELBV2, certDiscovery certs.CertDiscovery, certImporter certs.CertImporter, k8sClient client.Client, featureGates config.FeatureGates, clusterName string, defaultTags map[string]string,
 	externalManagedTags sets.Set[string], defaultSSLPolicy string, defaultTargetType string, defaultLoadBalancerScheme string,
 	backendSGProvider networking.BackendSGProvider, sgResolver networking.SecurityGroupResolver, enableBackendSG bool,
 	disableRestrictedSGRules bool, supportedAddons []addon.Addon, logger logr.Logger) Builder {
@@ -65,6 +65,7 @@ func NewModelBuilder(subnetsResolver networking.SubnetsResolver,
 		elbv2Client:              elbv2Client,
 		k8sClient:                k8sClient,
 		certDiscovery:            certDiscovery,
+		certImporter:             certImporter,
 		subnetBuilder:            subnetBuilder,
 		securityGroupBuilder:     sgBuilder,
 		loadBalancerType:         loadBalancerType,
@@ -106,6 +107,7 @@ type baseModelBuilder struct {
 	ec2Client                  services.EC2
 	elbv2Client                services.ELBV2
 	certDiscovery              certs.CertDiscovery
+	certImporter               certs.CertImporter
 	k8sClient                  client.Client
 	metricsCollector           lbcmetrics.MetricCollector
 	lbBuilder                  loadBalancerBuilder
@@ -181,7 +183,7 @@ func (baseBuilder *baseModelBuilder) Build(ctx context.Context, gw *gwv1.Gateway
 
 	tgbNetworkingBuilder := newTargetGroupBindingNetworkBuilder(baseBuilder.disableRestrictedSGRules, baseBuilder.vpcID, spec.Scheme, lbConf.Spec.SourceRanges, securityGroups, subnets.ec2Result, baseBuilder.vpcInfoProvider)
 	tgBuilder := newTargetGroupBuilder(baseBuilder.clusterName, baseBuilder.vpcID, baseBuilder.gwTagHelper, baseBuilder.loadBalancerType, tgbNetworkingBuilder, baseBuilder.tgPropertiesConstructor, baseBuilder.defaultTargetType, targetGroupNameToArnMapper)
-	listenerBuilder := newListenerBuilder(baseBuilder.loadBalancerType, tgBuilder, baseBuilder.gwTagHelper, baseBuilder.certDiscovery, baseBuilder.clusterName, baseBuilder.defaultSSLPolicy, baseBuilder.elbv2Client, baseBuilder.k8sClient, secretsManager, baseBuilder.logger)
+	listenerBuilder := newListenerBuilder(baseBuilder.loadBalancerType, tgBuilder, baseBuilder.gwTagHelper, baseBuilder.certDiscovery, baseBuilder.certImporter, baseBuilder.clusterName, baseBuilder.defaultSSLPolicy, baseBuilder.elbv2Client, baseBuilder.k8sClient, secretsManager, baseBuilder.logger)
 
 	secrets, err := listenerBuilder.buildListeners(ctx, stack, lb, gw, listeners, routes, lbConf)
 	if err != nil {

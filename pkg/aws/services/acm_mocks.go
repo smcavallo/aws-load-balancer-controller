@@ -97,6 +97,36 @@ func (mr *MockACMMockRecorder) ListTagsForCertificate(arg0, arg1 interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListTagsForCertificate", reflect.TypeOf((*MockACM)(nil).ListTagsForCertificate), arg0, arg1)
 }
 
+// ImportCertificateWithContext mocks base method.
+func (m *MockACM) ImportCertificateWithContext(arg0 context.Context, arg1 *acm.ImportCertificateInput) (*acm.ImportCertificateOutput, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ImportCertificateWithContext", arg0, arg1)
+	ret0, _ := ret[0].(*acm.ImportCertificateOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ImportCertificateWithContext indicates an expected call of ImportCertificateWithContext.
+func (mr *MockACMMockRecorder) ImportCertificateWithContext(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ImportCertificateWithContext", reflect.TypeOf((*MockACM)(nil).ImportCertificateWithContext), arg0, arg1)
+}
+
+// AddTagsToCertificateWithContext mocks base method.
+func (m *MockACM) AddTagsToCertificateWithContext(arg0 context.Context, arg1 *acm.AddTagsToCertificateInput) (*acm.AddTagsToCertificateOutput, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AddTagsToCertificateWithContext", arg0, arg1)
+	ret0, _ := ret[0].(*acm.AddTagsToCertificateOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AddTagsToCertificateWithContext indicates an expected call of AddTagsToCertificateWithContext.
+func (mr *MockACMMockRecorder) AddTagsToCertificateWithContext(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddTagsToCertificateWithContext", reflect.TypeOf((*MockACM)(nil).AddTagsToCertificateWithContext), arg0, arg1)
+}
+
 // RequestCertificateWithContext mocks base method.
 func (m *MockACM) RequestCertificateWithContext(arg0 context.Context, arg1 *acm.RequestCertificateInput) (*acm.RequestCertificateOutput, error) {
 	m.ctrl.T.Helper()

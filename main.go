@@ -120,6 +120,7 @@ type gatewayControllerConfig struct {
 	targetGroupCollector     awsmetrics.TargetGroupCollector
 	targetGroupARNMapper     shared_utils.TargetGroupARNMapper
 	certDiscovery            certs.CertDiscovery
+	certImporter             certs.CertImporter
 	listenerSetStatusUpdater gateway.ListenerSetStatusSubmitter
 }
 
@@ -288,6 +289,7 @@ func main() {
 		routeReconciler := gateway.NewRouteReconciler(routeReconcilerQueue, mgr.GetClient(), ctrl.Log.WithName("routeReconciler"))
 		serviceReferenceCounter := referencecounter.NewServiceReferenceCounter()
 		certDiscovery := certs.NewACMCertDiscovery(cloud.ACM(), controllerCFG.IngressConfig.AllowedCertificateAuthorityARNs, false, ctrl.Log.WithName("gateway-cert-discovery"))
+		certImporter := certs.NewACMCertImporter(cloud.ACM(), lbcMetricsCollector, ctrl.Log.WithName("gateway-cert-importer"))
 
 		gwControllerConfig := &gatewayControllerConfig{
 			cloud:                    cloud,
@@ -308,6 +310,7 @@ func main() {
 			targetGroupCollector:     targetGroupCollector,
 			targetGroupARNMapper:     tgArnMapper,
 			certDiscovery:            certDiscovery,
+			certImporter:             certImporter,
 			listenerSetStatusUpdater: listenerSetStatusUpdater,
 		}
 
@@ -531,6 +534,7 @@ func setupGatewayController(ctx context.Context, mgr ctrl.Manager, cfg *gatewayC
 			cfg.cloud,
 			cfg.k8sClient,
 			cfg.certDiscovery,
+			cfg.certImporter,
 			mgr.GetEventRecorderFor(controllerType),
 			cfg.controllerCFG,
 			cfg.finalizerManager,
@@ -555,6 +559,7 @@ func setupGatewayController(ctx context.Context, mgr ctrl.Manager, cfg *gatewayC
 			cfg.cloud,
 			cfg.k8sClient,
 			cfg.certDiscovery,
+			cfg.certImporter,
 			cfg.serviceReferenceCounter,
 			mgr.GetEventRecorderFor(controllerType),
 			cfg.controllerCFG,

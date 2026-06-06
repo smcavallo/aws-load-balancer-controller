@@ -45,6 +45,7 @@ type listenerBuilderImpl struct {
 	defaultSSLPolicy           string
 	secretsManager             k8s.SecretsManager
 	certDiscovery              certs.CertDiscovery
+	certImporter               certs.CertImporter
 	targetGroupNameToArnMapper shared_utils.TargetGroupARNMapper
 	logger                     logr.Logger
 }
@@ -626,7 +627,7 @@ func generateListenerPortKey(port int32, listener gwListenerConfig) string {
 	return fmt.Sprintf("%s:%d", strings.ToLower(string(listener.protocol)), port)
 }
 
-func newListenerBuilder(loadBalancerType elbv2model.LoadBalancerType, tgBuilder targetGroupBuilder, tagHelper tagHelper, certDiscovery certs.CertDiscovery, clusterName string, defaultSSLPolicy string, elbv2Client services.ELBV2, k8sClient client.Client, secretsManager k8s.SecretsManager, logger logr.Logger) listenerBuilder {
+func newListenerBuilder(loadBalancerType elbv2model.LoadBalancerType, tgBuilder targetGroupBuilder, tagHelper tagHelper, certDiscovery certs.CertDiscovery, certImporter certs.CertImporter, clusterName string, defaultSSLPolicy string, elbv2Client services.ELBV2, k8sClient client.Client, secretsManager k8s.SecretsManager, logger logr.Logger) listenerBuilder {
 	return &listenerBuilderImpl{
 		elbv2Client:      elbv2Client,
 		k8sClient:        k8sClient,
@@ -637,6 +638,7 @@ func newListenerBuilder(loadBalancerType elbv2model.LoadBalancerType, tgBuilder 
 		defaultSSLPolicy: defaultSSLPolicy,
 		secretsManager:   secretsManager,
 		certDiscovery:    certDiscovery,
+		certImporter:     certImporter,
 		logger:           logger,
 	}
 }

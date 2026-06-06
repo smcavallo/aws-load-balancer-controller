@@ -17,6 +17,8 @@ type ACM interface {
 	DescribeCertificateWithContext(ctx context.Context, req *acm.DescribeCertificateInput) (*acm.DescribeCertificateOutput, error)
 	ListTagsForCertificate(ctx context.Context, input *acm.ListTagsForCertificateInput) (*acm.ListTagsForCertificateOutput, error)
 	RequestCertificateWithContext(ctx context.Context, input *acm.RequestCertificateInput) (*acm.RequestCertificateOutput, error)
+	ImportCertificateWithContext(ctx context.Context, input *acm.ImportCertificateInput) (*acm.ImportCertificateOutput, error)
+	AddTagsToCertificateWithContext(ctx context.Context, input *acm.AddTagsToCertificateInput) (*acm.AddTagsToCertificateOutput, error)
 	DeleteCertificateWithContext(ctx context.Context, input *acm.DeleteCertificateInput) (*acm.DeleteCertificateOutput, error)
 	WaitForCertificateIssuedWithContext(ctx context.Context, arn string, waitTime time.Duration) error
 }
@@ -83,6 +85,22 @@ func (c *acmClient) RequestCertificateWithContext(ctx context.Context, req *acm.
 	}
 
 	return resp, nil
+}
+
+func (c *acmClient) ImportCertificateWithContext(ctx context.Context, input *acm.ImportCertificateInput) (*acm.ImportCertificateOutput, error) {
+	client, err := c.awsClientsProvider.GetACMClient(ctx, "ImportCertificate")
+	if err != nil {
+		return nil, err
+	}
+	return client.ImportCertificate(ctx, input)
+}
+
+func (c *acmClient) AddTagsToCertificateWithContext(ctx context.Context, input *acm.AddTagsToCertificateInput) (*acm.AddTagsToCertificateOutput, error) {
+	client, err := c.awsClientsProvider.GetACMClient(ctx, "AddTagsToCertificate")
+	if err != nil {
+		return nil, err
+	}
+	return client.AddTagsToCertificate(ctx, input)
 }
 
 func (c *acmClient) WaitForCertificateIssuedWithContext(ctx context.Context, arn string, waitTime time.Duration) error {

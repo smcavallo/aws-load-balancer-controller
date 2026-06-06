@@ -25,6 +25,9 @@ type MetricCollector interface {
 	ObserveControllerReconcileLatency(controller string, stage string, fn func())
 	ObserveWebhookValidationError(webhookName string, errorType string)
 	ObserveWebhookMutationError(webhookName string, errorType string)
+	// ObserveACMCertificateImport records the outcome and latency of importing a Kubernetes TLS secret into ACM.
+	// result should be one of the ACMImportResult* constants.
+	ObserveACMCertificateImport(namespace string, secretName string, result string, duration time.Duration)
 	StartCollectTopTalkers(ctx context.Context)
 	StartCollectCacheSize(ctx context.Context)
 }
@@ -57,6 +60,9 @@ func (n *noOpCollector) ObserveControllerCacheSize(_ string, _ int) {
 }
 
 func (n *noOpCollector) ObserveControllerReconcileLatency(_ string, _ string, fn func()) {
+}
+
+func (n *noOpCollector) ObserveACMCertificateImport(_ string, _ string, _ string, _ time.Duration) {
 }
 
 func (n *noOpCollector) StartCollectTopTalkers(_ context.Context) {
@@ -116,6 +122,16 @@ func (c *collector) ObserveWebhookValidationError(webhookName string, errorCateg
 		labelWebhookName:   webhookName,
 		labelErrorCategory: errorCategory,
 	}).Inc()
+}
+
+func (c *collector) ObserveACMCertificateImport(namespace string, secretName string, result string, duration time.Duration) {
+	labels := prometheus.Labels{
+		labelNamespace: namespace,
+		labelName:      secretName,
+		labelResult:    result,
+	}
+	c.instruments.acmCertImportTotal.With(labels).Inc()
+	c.instruments.acmCertImportDuration.With(prometheus.Labels{labelResult: result}).Observe(duration.Seconds())
 }
 
 func (c *collector) ObserveWebhookMutationError(webhookName string, errorCategory string) {
