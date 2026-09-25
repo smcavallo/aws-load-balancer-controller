@@ -27,9 +27,17 @@ import (
 
 // TODO: Add more relevant info like TLS settings and hostnames later wherever applicable
 type gwListenerConfig struct {
-	protocol  elbv2model.Protocol
-	hostnames sets.Set[string]
+	protocol        elbv2model.Protocol
+	hostnames       sets.Set[string]
+	certificateRefs []gwv1.SecretObjectReference
 }
+
+const (
+	certRefSecretKind      = "Secret"
+	certRefCoreAPIGroup    = ""
+	certRefGatewayAPIGroup = "gateway.networking.k8s.io"
+	certRefGatewayKind     = "Gateway"
+)
 
 type listenerBuilder interface {
 	buildListeners(ctx context.Context, stack core.Stack, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, listeners []gwv1.Listener, routes map[int32][]routeutils.RouteDescriptor, lbConf elbv2gw.LoadBalancerConfiguration) ([]types.NamespacedName, error)
@@ -62,10 +70,11 @@ func (l listenerBuilderImpl) buildListeners(ctx context.Context, stack core.Stac
 	if len(gwLsPorts.Intersection(portsWithRoutes).List()) != 0 {
 		lbLsCfgs := mapLoadBalancerListenerConfigsByPort(lbCfg, gwLsCfgs)
 		for _, port := range gwLsPorts.Intersection(portsWithRoutes).List() {
-			ls, err := l.buildListener(ctx, stack, lb, gw, port, routes[port], lbCfg, gwLsCfgs[port], lbLsCfgs[port])
+			ls, certSecretKeys, err := l.buildListener(ctx, stack, lb, gw, port, routes[port], lbCfg, gwLsCfgs[port], lbLsCfgs[port])
 			if err != nil {
 				return nil, err
 			}
+			secrets = append(secrets, certSecretKeys...)
 
 			if ls == nil {
 				continue
@@ -85,43 +94,44 @@ func (l listenerBuilderImpl) buildListeners(ctx context.Context, stack core.Stac
 	return secrets, nil
 }
 
-func (l listenerBuilderImpl) buildListener(ctx context.Context, stack core.Stack, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, port int32, routes []routeutils.RouteDescriptor, lbCfg elbv2gw.LoadBalancerConfiguration, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) (*elbv2model.Listener, error) {
+func (l listenerBuilderImpl) buildListener(ctx context.Context, stack core.Stack, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, port int32, routes []routeutils.RouteDescriptor, lbCfg elbv2gw.LoadBalancerConfiguration, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) (*elbv2model.Listener, []types.NamespacedName, error) {
 	var listenerSpec *elbv2model.ListenerSpec
+	var certSecretKeys []types.NamespacedName
 
 	var err error
 	if l.loadBalancerType == elbv2model.LoadBalancerTypeApplication {
-		listenerSpec, err = l.buildL7ListenerSpec(ctx, lb, gw, lbCfg, port, gwLsCfg, lbLsCfg)
+		listenerSpec, certSecretKeys, err = l.buildL7ListenerSpec(ctx, lb, gw, lbCfg, port, gwLsCfg, lbLsCfg)
 	} else {
-		listenerSpec, err = l.buildL4ListenerSpec(ctx, stack, lb, gw, lbCfg, port, routes, gwLsCfg, lbLsCfg)
+		listenerSpec, certSecretKeys, err = l.buildL4ListenerSpec(ctx, stack, lb, gw, lbCfg, port, routes, gwLsCfg, lbLsCfg)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if listenerSpec == nil {
-		return nil, nil
+		return nil, certSecretKeys, nil
 	}
 
 	lsResID := fmt.Sprintf("%v", port)
-	return elbv2model.NewListener(stack, lsResID, *listenerSpec), nil
+	return elbv2model.NewListener(stack, lsResID, *listenerSpec), certSecretKeys, nil
 }
 
-func (l listenerBuilderImpl) buildListenerSpec(ctx context.Context, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, port int32, lbCfg elbv2gw.LoadBalancerConfiguration, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) (*elbv2model.ListenerSpec, error) {
+func (l listenerBuilderImpl) buildListenerSpec(ctx context.Context, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, port int32, lbCfg elbv2gw.LoadBalancerConfiguration, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) (*elbv2model.ListenerSpec, []types.NamespacedName, error) {
 	tags, err := l.buildListenerTags(lbCfg)
 	if err != nil {
-		return &elbv2model.ListenerSpec{}, err
+		return &elbv2model.ListenerSpec{}, nil, err
 	}
 	lsAttributes, attributesErr := buildListenerAttributes(lbLsCfg)
 	if attributesErr != nil {
-		return &elbv2model.ListenerSpec{}, attributesErr
+		return &elbv2model.ListenerSpec{}, nil, attributesErr
 	}
 	sslPolicy, sslPolicyErr := l.buildSSLPolicy(gwLsCfg, lbLsCfg)
 	if sslPolicyErr != nil {
-		return &elbv2model.ListenerSpec{}, sslPolicyErr
+		return &elbv2model.ListenerSpec{}, nil, sslPolicyErr
 	}
-	certificates, certsErr := l.buildCertificates(ctx, gw, port, gwLsCfg, lbLsCfg)
+	certificates, certSecretKeys, certsErr := l.buildCertificates(ctx, gw, port, gwLsCfg, lbLsCfg)
 	if certsErr != nil {
-		return &elbv2model.ListenerSpec{}, certsErr
+		return &elbv2model.ListenerSpec{}, nil, certsErr
 	}
 
 	// Apply QUIC protocol upgrade if enabled
@@ -133,7 +143,7 @@ func (l listenerBuilderImpl) buildListenerSpec(ctx context.Context, lb *elbv2mod
 		case elbv2model.ProtocolTCP_UDP:
 			protocol = elbv2model.ProtocolTCP_QUIC
 		default:
-			return &elbv2model.ListenerSpec{}, fmt.Errorf("QUIC protocol upgrade not supported for protocol %v", protocol)
+			return &elbv2model.ListenerSpec{}, nil, fmt.Errorf("QUIC protocol upgrade not supported for protocol %v", protocol)
 		}
 	}
 
@@ -146,45 +156,45 @@ func (l listenerBuilderImpl) buildListenerSpec(ctx context.Context, lb *elbv2mod
 		Tags:               tags,
 		ListenerAttributes: lsAttributes,
 	}
-	return listenerSpec, nil
+	return listenerSpec, certSecretKeys, nil
 }
 
-func (l listenerBuilderImpl) buildL7ListenerSpec(ctx context.Context, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, lbCfg elbv2gw.LoadBalancerConfiguration, port int32, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) (*elbv2model.ListenerSpec, error) {
-	listenerSpec, err := l.buildListenerSpec(ctx, lb, gw, port, lbCfg, gwLsCfg, lbLsCfg)
+func (l listenerBuilderImpl) buildL7ListenerSpec(ctx context.Context, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, lbCfg elbv2gw.LoadBalancerConfiguration, port int32, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) (*elbv2model.ListenerSpec, []types.NamespacedName, error) {
+	listenerSpec, certSecretKeys, err := l.buildListenerSpec(ctx, lb, gw, port, lbCfg, gwLsCfg, lbLsCfg)
 	if err != nil {
-		return &elbv2model.ListenerSpec{}, err
+		return &elbv2model.ListenerSpec{}, nil, err
 	}
 	listenerSpec.DefaultActions = buildL7ListenerDefaultActions()
 	mutualAuth, err := l.buildMutualAuthenticationAttributes(ctx, gwLsCfg, lbLsCfg)
 	if err != nil {
-		return &elbv2model.ListenerSpec{}, err
+		return &elbv2model.ListenerSpec{}, nil, err
 	}
 	listenerSpec.MutualAuthentication = mutualAuth
-	return listenerSpec, nil
+	return listenerSpec, certSecretKeys, nil
 }
 
-func (l listenerBuilderImpl) buildL4ListenerSpec(ctx context.Context, stack core.Stack, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, lbCfg elbv2gw.LoadBalancerConfiguration, port int32, routes []routeutils.RouteDescriptor, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) (*elbv2model.ListenerSpec, error) {
-	listenerSpec, err := l.buildListenerSpec(ctx, lb, gw, port, lbCfg, gwLsCfg, lbLsCfg)
+func (l listenerBuilderImpl) buildL4ListenerSpec(ctx context.Context, stack core.Stack, lb *elbv2model.LoadBalancer, gw *gwv1.Gateway, lbCfg elbv2gw.LoadBalancerConfiguration, port int32, routes []routeutils.RouteDescriptor, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) (*elbv2model.ListenerSpec, []types.NamespacedName, error) {
+	listenerSpec, certSecretKeys, err := l.buildListenerSpec(ctx, lb, gw, port, lbCfg, gwLsCfg, lbLsCfg)
 	if err != nil {
-		return &elbv2model.ListenerSpec{}, err
+		return &elbv2model.ListenerSpec{}, nil, err
 	}
 	alpnPolicy, err := buildListenerALPNPolicy(listenerSpec.Protocol, lbLsCfg)
 	if err != nil {
-		return &elbv2model.ListenerSpec{}, err
+		return &elbv2model.ListenerSpec{}, nil, err
 	}
 	listenerSpec.ALPNPolicy = alpnPolicy
 
 	tgTuples, err := l.buildL4TargetGroupTuples(stack, routes, gw, port, listenerSpec.Protocol, lb.Spec.IPAddressType)
 	if err != nil {
-		return &elbv2model.ListenerSpec{}, err
+		return &elbv2model.ListenerSpec{}, nil, err
 	}
 
 	if len(tgTuples) == 0 {
 		l.logger.Info("Skipping listener creation due to no backend references", "listener", fmt.Sprintf("%v:%v", listenerSpec.Protocol, port), "gateway", k8s.NamespacedName(gw))
-		return nil, nil
+		return nil, certSecretKeys, nil
 	}
 	listenerSpec.DefaultActions = buildL4ListenerDefaultActions(tgTuples, lbLsCfg)
-	return listenerSpec, nil
+	return listenerSpec, certSecretKeys, nil
 }
 
 func (l listenerBuilderImpl) buildL4TargetGroupTuples(stack core.Stack, routes []routeutils.RouteDescriptor, gw *gwv1.Gateway, port int32, listenerProtocol elbv2model.Protocol, ipAddressType elbv2model.IPAddressType) ([]elbv2model.TargetGroupTuple, error) {
@@ -357,24 +367,36 @@ func buildListenerAttributes(lsCfg *elbv2gw.ListenerConfiguration) ([]elbv2model
 	return attributes, nil
 }
 
-func (l listenerBuilderImpl) buildCertificates(ctx context.Context, gw *gwv1.Gateway, port int32, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) ([]elbv2model.Certificate, error) {
+func (l listenerBuilderImpl) buildCertificates(ctx context.Context, gw *gwv1.Gateway, port int32, gwLsCfg gwListenerConfig, lbLsCfg *elbv2gw.ListenerConfiguration) ([]elbv2model.Certificate, []types.NamespacedName, error) {
 	if !isSecureProtocol(gwLsCfg.protocol) {
-		return []elbv2model.Certificate{}, nil
+		return []elbv2model.Certificate{}, nil, nil
 	}
 	certs := make([]elbv2model.Certificate, 0)
 	// Build explict certs
 	if lbLsCfg != nil {
 		certs = append(certs, l.buildExplicitTLSCertARNs(ctx, *lbLsCfg)...)
 	}
-	// If any explicit certs are not found then build inferred certs using cert discovery
+	// If no explicit ARNs were configured, honor the Gateway API's own TLS.CertificateRefs
+	// (Secret references) on the listener by importing the referenced secret(s) into ACM.
+	var certSecretKeys []types.NamespacedName
+	if len(certs) == 0 && len(gwLsCfg.certificateRefs) > 0 {
+		refCerts, refSecretKeys, err := l.buildTLSCertARNsFromSecretRefs(ctx, gw, gwLsCfg.certificateRefs)
+		if err != nil {
+			l.logger.Error(err, fmt.Sprintf("Unable to import TLS certificateRefs for listener on gateway %s with protocol:port %s:%v", k8s.NamespacedName(gw), gwLsCfg.protocol, port))
+			return []elbv2model.Certificate{}, nil, err
+		}
+		certs = append(certs, refCerts...)
+		certSecretKeys = refSecretKeys
+	}
+	// If we still have nothing, fall back to inferred certs using cert discovery
 	if len(certs) == 0 {
 		if len(gwLsCfg.hostnames) == 0 {
-			return []elbv2model.Certificate{}, errors.Errorf("No hostnames found for TLS cert discovery for listener on gateway %s with protocol:port %s:%v", k8s.NamespacedName(gw), gwLsCfg.protocol, port)
+			return []elbv2model.Certificate{}, nil, errors.Errorf("No hostnames found for TLS cert discovery for listener on gateway %s with protocol:port %s:%v", k8s.NamespacedName(gw), gwLsCfg.protocol, port)
 		}
 		discoveredCerts, err := l.buildInferredTLSCertARNs(ctx, gwLsCfg.hostnames.UnsortedList())
 		if err != nil {
 			l.logger.Error(err, fmt.Sprintf("Unable to discover certs for listener on gateway %s with protocol:port %s:%v", k8s.NamespacedName(gw), gwLsCfg.protocol, port))
-			return []elbv2model.Certificate{}, err
+			return []elbv2model.Certificate{}, nil, err
 		}
 		for _, cert := range discoveredCerts {
 			certs = append(certs, elbv2model.Certificate{
@@ -382,7 +404,59 @@ func (l listenerBuilderImpl) buildCertificates(ctx context.Context, gw *gwv1.Gat
 			})
 		}
 	}
-	return certs, nil
+	return certs, certSecretKeys, nil
+}
+
+// buildTLSCertARNsFromSecretRefs resolves a Gateway listener's TLS.CertificateRefs to ACM
+// certificate ARNs, importing each referenced Secret into ACM (via certImporter) the first
+// time it's seen and reusing the existing import on subsequent reconciles. Returns the
+// resolved Secret keys alongside the certificates so callers can register them with
+// SecretsManager for watch/GC purposes.
+func (l listenerBuilderImpl) buildTLSCertARNsFromSecretRefs(ctx context.Context, gw *gwv1.Gateway, refs []gwv1.SecretObjectReference) ([]elbv2model.Certificate, []types.NamespacedName, error) {
+	certificates := make([]elbv2model.Certificate, 0, len(refs))
+	secretKeys := make([]types.NamespacedName, 0, len(refs))
+
+	for _, ref := range refs {
+		if ref.Group != nil && string(*ref.Group) != certRefCoreAPIGroup {
+			return nil, nil, errors.Errorf("unsupported certificateRefs group %q on gateway %s, only the core API group is supported for Secret references", string(*ref.Group), k8s.NamespacedName(gw))
+		}
+		if ref.Kind != nil && string(*ref.Kind) != certRefSecretKind {
+			return nil, nil, errors.Errorf("unsupported certificateRefs kind %q on gateway %s, only %q is supported", string(*ref.Kind), k8s.NamespacedName(gw), certRefSecretKind)
+		}
+
+		secretNamespace := gw.Namespace
+		if ref.Namespace != nil {
+			secretNamespace = string(*ref.Namespace)
+		}
+		secretKey := types.NamespacedName{Namespace: secretNamespace, Name: string(ref.Name)}
+
+		if secretNamespace != gw.Namespace {
+			allowed, err := shared_utils.ValidateCrossNamespaceReference(ctx, l.k8sClient, gw.Namespace, certRefGatewayAPIGroup, certRefGatewayKind, certRefCoreAPIGroup, certRefSecretKind, secretKey.Namespace, secretKey.Name)
+			if err != nil {
+				return nil, nil, errors.Wrapf(err, "unable to perform reference grant check for certificateRef secret %s", secretKey)
+			}
+			if !allowed {
+				return nil, nil, errors.Errorf("certificateRef secret %s is in a different namespace than gateway %s and no ReferenceGrant permits it", secretKey, k8s.NamespacedName(gw))
+			}
+		}
+
+		secret, err := l.secretsManager.GetSecret(ctx, l.k8sClient, secretKey)
+		if err != nil {
+			return nil, nil, errors.Wrapf(err, "unable to fetch certificateRef secret %s", secretKey)
+		}
+
+		arn, err := l.certImporter.ImportSecretAsCertificate(ctx, secret)
+		if err != nil {
+			return nil, nil, errors.Wrapf(err, "unable to import certificateRef secret %s into ACM", secretKey)
+		}
+
+		certificates = append(certificates, elbv2model.Certificate{
+			CertificateARN: acmModel.NewExistingCertificate(arn).CertificateARN(),
+		})
+		secretKeys = append(secretKeys, secretKey)
+	}
+
+	return certificates, secretKeys, nil
 }
 
 func (l listenerBuilderImpl) buildExplicitTLSCertARNs(ctx context.Context, listener elbv2gw.ListenerConfiguration) []elbv2model.Certificate {
@@ -574,6 +648,12 @@ func mapGatewayListenerConfigsByPort(listeners []gwv1.Listener, routes map[int32
 
 		if listener.Hostname != nil {
 			gwListenerConfigs[port].hostnames.Insert(string(*listener.Hostname))
+		}
+
+		if isSecureProtocol(protocol) && listener.TLS != nil && len(listener.TLS.CertificateRefs) > 0 {
+			cfg := gwListenerConfigs[port]
+			cfg.certificateRefs = append(cfg.certificateRefs, listener.TLS.CertificateRefs...)
+			gwListenerConfigs[port] = cfg
 		}
 
 		listenerRoutes := routes[port]

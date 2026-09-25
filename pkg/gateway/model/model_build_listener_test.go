@@ -15,11 +15,15 @@ import (
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/aws-load-balancer-controller/pkg/aws/services"
 	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/routeutils"
 	coremodel "sigs.k8s.io/aws-load-balancer-controller/pkg/model/core"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pkg/errors"
@@ -1128,7 +1132,7 @@ func TestBuildCertificates(t *testing.T) {
 				certDiscovery: mockCertDiscovery,
 			}
 
-			got, err := builder.buildCertificates(context.Background(), tt.gateway, tt.port, tt.gwLsCfg, tt.lbLsCfg)
+			got, _, err := builder.buildCertificates(context.Background(), tt.gateway, tt.port, tt.gwLsCfg, tt.lbLsCfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("buildCertificates() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -1145,6 +1149,152 @@ func TestBuildCertificates(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeSecretsManager is a minimal k8s.SecretsManager double that just proxies
+// GetSecret straight to the wrapped client -- good enough for unit tests that
+// don't need the real watch/cache behavior.
+type fakeSecretsManager struct {
+	k8sClient client.Client
+}
+
+func (f *fakeSecretsManager) MonitorSecrets(_ string, _ []types.NamespacedName) {}
+
+func (f *fakeSecretsManager) GetSecret(ctx context.Context, k8sClient client.Client, secretKey types.NamespacedName) (*corev1.Secret, error) {
+	secret := &corev1.Secret{}
+	if err := k8sClient.Get(ctx, secretKey, secret); err != nil {
+		return nil, err
+	}
+	return secret, nil
+}
+
+// fakeCertImporter is a minimal certs.CertImporter double recording every
+// secret it was asked to import.
+type fakeCertImporter struct {
+	arn        string
+	err        error
+	calledWith []types.NamespacedName
+}
+
+func (f *fakeCertImporter) ImportSecretAsCertificate(_ context.Context, secret *corev1.Secret) (string, error) {
+	f.calledWith = append(f.calledWith, types.NamespacedName{Namespace: secret.Namespace, Name: secret.Name})
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.arn, nil
+}
+
+func Test_buildCertificates_CertificateRefs(t *testing.T) {
+	secretRefName := gwv1.ObjectName("tls-secret")
+
+	t.Run("resolves a same-namespace certificateRef by importing it into ACM", func(t *testing.T) {
+		k8sClient := fake.NewClientBuilder().Build()
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "tls-secret"},
+			Data:       map[string][]byte{corev1.TLSCertKey: []byte("cert"), corev1.TLSPrivateKeyKey: []byte("key")},
+		}
+		assert.NoError(t, k8sClient.Create(context.Background(), secret))
+
+		importer := &fakeCertImporter{arn: "arn:aws:acm:region:123456789012:certificate/from-secret"}
+		builder := &listenerBuilderImpl{
+			k8sClient:      k8sClient,
+			secretsManager: &fakeSecretsManager{k8sClient: k8sClient},
+			certImporter:   importer,
+		}
+
+		gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "gw"}}
+		gwLsCfg := gwListenerConfig{
+			protocol:        elbv2model.ProtocolHTTPS,
+			hostnames:       sets.New[string](),
+			certificateRefs: []gwv1.SecretObjectReference{{Name: secretRefName}},
+		}
+
+		got, gotSecretKeys, err := builder.buildCertificates(context.Background(), gw, 443, gwLsCfg, nil)
+		assert.NoError(t, err)
+
+		wantArn, err := acmModel.NewExistingCertificate(importer.arn).CertificateARN().Resolve(t.Context())
+		assert.NoError(t, err)
+		gotArn, err := got[0].CertificateARN.Resolve(t.Context())
+		assert.NoError(t, err)
+		assert.Equal(t, wantArn, gotArn)
+
+		assert.Equal(t, []types.NamespacedName{{Namespace: "ns1", Name: "tls-secret"}}, gotSecretKeys)
+		assert.Equal(t, []types.NamespacedName{{Namespace: "ns1", Name: "tls-secret"}}, importer.calledWith)
+	})
+
+	t.Run("explicit LoadBalancerConfiguration certificates take precedence, importer is not called", func(t *testing.T) {
+		k8sClient := fake.NewClientBuilder().Build()
+		importer := &fakeCertImporter{arn: "should-not-be-used"}
+		builder := &listenerBuilderImpl{
+			k8sClient:      k8sClient,
+			secretsManager: &fakeSecretsManager{k8sClient: k8sClient},
+			certImporter:   importer,
+		}
+
+		gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "gw"}}
+		gwLsCfg := gwListenerConfig{
+			protocol:        elbv2model.ProtocolHTTPS,
+			hostnames:       sets.New[string](),
+			certificateRefs: []gwv1.SecretObjectReference{{Name: secretRefName}},
+		}
+		lbLsCfg := &elbv2gw.ListenerConfiguration{
+			DefaultCertificate: awssdk.String("arn:aws:acm:region:123456789012:certificate/explicit-cert"),
+		}
+
+		got, gotSecretKeys, err := builder.buildCertificates(context.Background(), gw, 443, gwLsCfg, lbLsCfg)
+		assert.NoError(t, err)
+		assert.Empty(t, gotSecretKeys)
+		assert.Empty(t, importer.calledWith)
+
+		gotArn, err := got[0].CertificateARN.Resolve(t.Context())
+		assert.NoError(t, err)
+		wantArn, err := acmModel.NewExistingCertificate("arn:aws:acm:region:123456789012:certificate/explicit-cert").CertificateARN().Resolve(t.Context())
+		assert.NoError(t, err)
+		assert.Equal(t, wantArn, gotArn)
+	})
+
+	t.Run("cross-namespace certificateRef without a ReferenceGrant is rejected", func(t *testing.T) {
+		k8sClient := fake.NewClientBuilder().Build()
+		importer := &fakeCertImporter{arn: "should-not-be-used"}
+		builder := &listenerBuilderImpl{
+			k8sClient:      k8sClient,
+			secretsManager: &fakeSecretsManager{k8sClient: k8sClient},
+			certImporter:   importer,
+		}
+
+		otherNS := gwv1.Namespace("ns2")
+		gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "gw"}}
+		gwLsCfg := gwListenerConfig{
+			protocol:        elbv2model.ProtocolHTTPS,
+			hostnames:       sets.New[string](),
+			certificateRefs: []gwv1.SecretObjectReference{{Name: secretRefName, Namespace: &otherNS}},
+		}
+
+		_, _, err := builder.buildCertificates(context.Background(), gw, 443, gwLsCfg, nil)
+		assert.Error(t, err)
+		assert.Empty(t, importer.calledWith)
+	})
+
+	t.Run("missing secret surfaces an error instead of silently falling back to discovery", func(t *testing.T) {
+		k8sClient := fake.NewClientBuilder().Build()
+		importer := &fakeCertImporter{arn: "should-not-be-used"}
+		builder := &listenerBuilderImpl{
+			k8sClient:      k8sClient,
+			secretsManager: &fakeSecretsManager{k8sClient: k8sClient},
+			certImporter:   importer,
+		}
+
+		gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "gw"}}
+		gwLsCfg := gwListenerConfig{
+			protocol:        elbv2model.ProtocolHTTPS,
+			hostnames:       sets.New[string](),
+			certificateRefs: []gwv1.SecretObjectReference{{Name: secretRefName}},
+		}
+
+		_, _, err := builder.buildCertificates(context.Background(), gw, 443, gwLsCfg, nil)
+		assert.Error(t, err)
+		assert.Empty(t, importer.calledWith)
+	})
 }
 
 func Test_buildMutualAuthenticationAttributes(t *testing.T) {

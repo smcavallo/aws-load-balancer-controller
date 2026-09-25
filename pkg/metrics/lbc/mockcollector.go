@@ -89,6 +89,15 @@ func (m *MockCollector) ObserveControllerTopTalkers(controller, namespace string
 	})
 }
 
+func (m *MockCollector) ObserveACMCertificateImport(namespace string, secretName string, result string, d time.Duration) {
+	m.Invocations[MetricACMCertificateImportTotal] = append(m.Invocations[MetricACMCertificateImportTotal], MockCounterMetric{
+		labelNamespace: namespace,
+		labelName:      secretName,
+		errorType:      result,
+	})
+	m.recordHistogram(MetricACMCertificateImportDuration, namespace, secretName, d)
+}
+
 func (m *MockCollector) recordHistogram(metricName string, namespace string, name string, d time.Duration) {
 	m.Invocations[metricName] = append(m.Invocations[MetricPodReadinessGateReady], MockHistogramMetric{
 		namespace: namespace,

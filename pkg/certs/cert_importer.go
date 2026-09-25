@@ -252,22 +252,22 @@ func parseTLSSecret(secret *corev1.Secret) (*parsedSecret, error) {
 		return nil, errors.Wrapf(err, "parsing %q", corev1.TLSCertKey)
 	}
 
-	// ca.crt is optional. It may itself contain a leaf+chain bundle (some
-	// issuers populate it as a convenience copy of tls.crt), so feed it
-	// through the same splitter and only keep its chain blocks.
+	// ca.crt is optional and, unlike tls.crt, is expected to hold pure chain
+	// material with no leaf of its own (that's the normal cert-manager
+	// shape) -- so, unlike tls.crt, we must NOT treat its first block as a
+	// disposable "leaf": doing so silently drops the first real intermediate
+	// from the chain. Some issuers do populate ca.crt as a convenience
+	// leaf+chain copy of tls.crt though, so strip any block that matches the
+	// leaf we already extracted before merging, then de-dup at the PEM-block
+	// level so a customer who put "leaf + intermediates" in tls.crt AND
+	// "intermediates + root" in ca.crt doesn't get duplicate blocks.
 	var chainFromCA []byte
 	if caCrt, ok := secret.Data[corev1.ServiceAccountRootCAKey]; ok && len(caCrt) > 0 {
-		_, chainFromCA, err = splitLeafAndChain(caCrt)
-		if err != nil {
-			return nil, errors.Wrapf(err, "parsing %q", corev1.ServiceAccountRootCAKey)
+		caBlocks, caErr := allCertificateBlocks(caCrt)
+		if caErr != nil {
+			return nil, errors.Wrapf(caErr, "parsing %q", corev1.ServiceAccountRootCAKey)
 		}
-		// If ca.crt was just intermediates/roots (no recognised leaf), the
-		// splitter returns them all as the "chain". If it duplicated the leaf,
-		// we silently drop that duplicate by only keeping chainFromCA.
-		// Either way, merge it after any intermediates that were already in
-		// tls.crt, then de-dup at the PEM-block level so a customer who put
-		// "leaf + intermediates" in tls.crt AND "intermediates + root" in
-		// ca.crt doesn't get duplicate blocks.
+		chainFromCA = removeMatchingBlock(caBlocks, leaf)
 	}
 
 	combinedChain := mergeChains(chainFromTLS, chainFromCA)
@@ -319,6 +319,55 @@ func isCertificateBlock(block *pem.Block) bool {
 	// CERTIFICATE" or "TRUSTED CERTIFICATE", which ACM also accepts.
 	t := strings.ToUpper(block.Type)
 	return strings.HasSuffix(t, "CERTIFICATE")
+}
+
+// allCertificateBlocks returns every CERTIFICATE-type PEM block in input,
+// re-encoded and concatenated in order. Unlike splitLeafAndChain, it makes no
+// assumption that the first block is a leaf to be split off -- callers use
+// this for inputs (like ca.crt) that are expected to hold pure chain
+// material, where treating the first block as a disposable leaf would
+// silently drop a real intermediate.
+func allCertificateBlocks(input []byte) ([]byte, error) {
+	var out []byte
+	rest := input
+	for {
+		block, remaining := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = remaining
+		if !isCertificateBlock(block) {
+			continue
+		}
+		out = append(out, pem.EncodeToMemory(block)...)
+	}
+	return out, nil
+}
+
+// removeMatchingBlock returns chain with any PEM block matching target's
+// fingerprint removed. Used to strip a leaf that an issuer duplicated into
+// ca.crt before that chain material gets merged with the rest of the chain.
+func removeMatchingBlock(chain []byte, target []byte) []byte {
+	if len(chain) == 0 || len(target) == 0 {
+		return chain
+	}
+	targetKey := blockFingerprint(target)
+
+	var out []byte
+	rest := chain
+	for {
+		block, remaining := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = remaining
+		encoded := pem.EncodeToMemory(block)
+		if blockFingerprint(encoded) == targetKey {
+			continue
+		}
+		out = append(out, encoded...)
+	}
+	return out
 }
 
 // mergeChains concatenates two PEM chains and removes duplicate blocks while
