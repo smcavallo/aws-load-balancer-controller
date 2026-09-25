@@ -11,7 +11,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/annotations"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/annotations"
 )
 
 const (
@@ -127,6 +127,15 @@ func newPodInfoBuilder(quicServerIDVariableName string) *podInfoBuilder {
 
 // podInfoConversionFunc computes the converted PodInfo per pod object.
 func (podInfoBuilder *podInfoBuilder) podInfoConverter(obj interface{}) (interface{}, error) {
+	// The informer transform must be idempotent: with the WatchListClient client-go
+	// feature (KEP-3157), initial state arrives as a stream and the reflector hands
+	// objects that may already be transformed to the destination FIFO, which applies
+	// the transform again. Returning an error here aborts the streaming sync and the
+	// reflector silently falls back to a conventional full LIST, which decodes every
+	// pod in the cluster into memory at once.
+	if podInfo, ok := obj.(*PodInfo); ok {
+		return podInfo, nil
+	}
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		return nil, errors.New("expect pod object")

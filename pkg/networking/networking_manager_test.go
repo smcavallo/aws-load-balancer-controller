@@ -7,7 +7,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/testutils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/testutils"
 	"sync"
 	"testing"
 
@@ -17,8 +17,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	elbv2api "sigs.k8s.io/aws-load-balancer-controller/apis/elbv2/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
+	elbv2api "sigs.k8s.io/aws-load-balancer-controller/v3/apis/elbv2/v1beta1"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
 )
 
 func Test_defaultNetworkingManager_computeIngressPermissionsForTGBNetworking(t *testing.T) {
@@ -62,6 +62,41 @@ func Test_defaultNetworkingManager_computeIngressPermissionsForTGBNetworking(t *
 						IpProtocol: awssdk.String("tcp"),
 						FromPort:   awssdk.Int32(8080),
 						ToPort:     awssdk.Int32(8080),
+						UserIdGroupPairs: []ec2types.UserIdGroupPair{
+							{
+								Description: awssdk.String("elbv2.k8s.aws/targetGroupBinding=shared"),
+								GroupId:     awssdk.String("sg-abcdefg"),
+							},
+						},
+					},
+					Labels: map[string]string{tgbNetworkingIPPermissionLabelKey: tgbNetworkingIPPermissionLabelValue},
+				},
+			},
+		},
+		{
+			name: "with one rule / one peer / empty ports",
+			args: args{
+				tgbNetworking: elbv2api.TargetGroupBindingNetworking{
+					Ingress: []elbv2api.NetworkingIngressRule{
+						{
+							From: []elbv2api.NetworkingPeer{
+								{
+									SecurityGroup: &elbv2api.SecurityGroup{
+										GroupID: "sg-abcdefg",
+									},
+								},
+							},
+							Ports: []elbv2api.NetworkingPort{},
+						},
+					},
+				},
+			},
+			want: []IPPermissionInfo{
+				{
+					Permission: ec2types.IpPermission{
+						IpProtocol: awssdk.String("tcp"),
+						FromPort:   awssdk.Int32(0),
+						ToPort:     awssdk.Int32(65535),
 						UserIdGroupPairs: []ec2types.UserIdGroupPair{
 							{
 								Description: awssdk.String("elbv2.k8s.aws/targetGroupBinding=shared"),

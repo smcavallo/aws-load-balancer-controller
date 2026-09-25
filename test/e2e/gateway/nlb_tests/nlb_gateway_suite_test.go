@@ -3,13 +3,10 @@ package nlb_tests
 import (
 	"testing"
 
-	"sigs.k8s.io/aws-load-balancer-controller/test/framework"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/test/e2e/gateway/alb_tests"
 )
-
-var tf *framework.Framework
 
 func TestNLBGateway(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -17,7 +14,7 @@ func TestNLBGateway(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	var err error
-	tf, err = framework.InitFramework()
-	Expect(err).NotTo(HaveOccurred())
+	Expect(InitTF()).To(Succeed())
+	// Init imported package's tf; its Describes are transitively registered here.
+	Expect(alb_tests.InitTF()).To(Succeed())
 })

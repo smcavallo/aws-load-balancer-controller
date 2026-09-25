@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -10,14 +12,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
-	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/apis/gateway/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/config"
-	ctrlerrors "sigs.k8s.io/aws-load-balancer-controller/pkg/error"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/constants"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/routeutils"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/runtime"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_constants"
+	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/v3/apis/gateway/v1"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/config"
+	ctrlerrors "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/error"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/routeutils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -25,7 +25,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
-	"time"
 )
 
 const (
@@ -33,13 +32,16 @@ const (
 )
 
 // NewListenerRuleConfigurationReconciler constructs a reconciler that responds to listener rule configuration changes
-func NewListenerRuleConfigurationReconciler(k8sClient client.Client, eventRecorder record.EventRecorder, controllerConfig config.ControllerConfig, finalizerManager k8s.FinalizerManager, logger logr.Logger) Reconciler {
+func NewListenerRuleConfigurationReconciler(k8sClient client.Client, eventRecorder record.EventRecorder, controllerConfig config.ControllerConfig, finalizerManager k8s.FinalizerManager, logger logr.Logger, successCallback func(name string, namespace string), errorCallBack func(name string, namespace string, err error)) Reconciler {
 	return &listenerRuleConfigurationReconciler{
 		k8sClient:        k8sClient,
 		eventRecorder:    eventRecorder,
 		logger:           logger,
 		finalizerManager: finalizerManager,
+		finalizer:        controllerConfig.GatewayFinalizerConfig.ListenerRuleConfigurationFinalizer,
 		workers:          controllerConfig.GatewayClassMaxConcurrentReconciles,
+		successCallback:  successCallback,
+		errorCallBack:    errorCallBack,
 	}
 }
 
@@ -50,7 +52,10 @@ type listenerRuleConfigurationReconciler struct {
 	eventRecorder    record.EventRecorder
 	secretsManager   k8s.SecretsManager
 	finalizerManager k8s.FinalizerManager
+	finalizer        string
 	workers          int
+	successCallback  func(name string, namespace string)
+	errorCallBack    func(name string, namespace string, err error)
 }
 
 func (r *listenerRuleConfigurationReconciler) SetupWatches(_ context.Context, ctrl controller.Controller, mgr ctrl.Manager, clientSet *kubernetes.Clientset) error {
@@ -66,12 +71,13 @@ func (r *listenerRuleConfigurationReconciler) SetupWatches(_ context.Context, ct
 	if err := ctrl.Watch(source.Channel(secretEventsChan, secretToLRCHandler)); err != nil {
 		return err
 	}
-	r.secretsManager = k8s.NewSecretsManager(clientSet, secretEventsChan, r.logger.WithName("secrets-manager"))
+	r.secretsManager = k8s.NewSecretsManager(clientSet, secretEventsChan, r.logger.WithName("secrets-manager"), "", "")
 	return nil
 }
 
 func (r *listenerRuleConfigurationReconciler) Reconcile(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
-	return runtime.HandleReconcileError(r.reconcile(ctx, req), r.logger)
+	err := r.reconcile(ctx, req)
+	return handleReconcileResult(req, err, r.logger, r.successCallback, r.errorCallBack)
 }
 
 func (r *listenerRuleConfigurationReconciler) reconcile(ctx context.Context, req reconcile.Request) error {
@@ -90,8 +96,8 @@ func (r *listenerRuleConfigurationReconciler) reconcile(ctx context.Context, req
 }
 
 func (r *listenerRuleConfigurationReconciler) handleUpdate(ctx context.Context, listenerRuleConf *elbv2gw.ListenerRuleConfiguration) error {
-	if !k8s.HasFinalizer(listenerRuleConf, shared_constants.ListenerRuleConfigurationFinalizer) {
-		if err := r.finalizerManager.AddFinalizers(ctx, listenerRuleConf, shared_constants.ListenerRuleConfigurationFinalizer); err != nil {
+	if !k8s.HasFinalizer(listenerRuleConf, r.finalizer) {
+		if err := r.finalizerManager.AddFinalizers(ctx, listenerRuleConf, r.finalizer); err != nil {
 			return err
 		}
 	}
@@ -116,7 +122,7 @@ func (r *listenerRuleConfigurationReconciler) handleUpdate(ctx context.Context, 
 }
 
 func (r *listenerRuleConfigurationReconciler) handleDelete(ctx context.Context, listenerRuleConf *elbv2gw.ListenerRuleConfiguration) error {
-	if !k8s.HasFinalizer(listenerRuleConf, shared_constants.ListenerRuleConfigurationFinalizer) {
+	if !k8s.HasFinalizer(listenerRuleConf, r.finalizer) {
 		return nil
 	}
 
@@ -130,7 +136,7 @@ func (r *listenerRuleConfigurationReconciler) handleDelete(ctx context.Context, 
 		return fmt.Errorf("failed to remove finalizers as listener rule configuration [%+v] is still in use", k8s.NamespacedName(listenerRuleConf))
 	}
 	r.secretsManager.MonitorSecrets(k8s.NamespacedName(listenerRuleConf).String(), nil)
-	return r.finalizerManager.RemoveFinalizers(ctx, listenerRuleConf, shared_constants.ListenerRuleConfigurationFinalizer)
+	return r.finalizerManager.RemoveFinalizers(ctx, listenerRuleConf, r.finalizer)
 }
 
 func (r *listenerRuleConfigurationReconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) (controller.Controller, error) {

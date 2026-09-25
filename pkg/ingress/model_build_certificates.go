@@ -8,9 +8,9 @@ import (
 
 	acmtypes "github.com/aws/aws-sdk-go-v2/service/acm/types"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/algorithm"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/annotations"
-	acmModel "sigs.k8s.io/aws-load-balancer-controller/pkg/model/acm"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/algorithm"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/annotations"
+	acmModel "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/acm"
 )
 
 func (t *defaultModelBuildTask) buildACMCertificates(ctx context.Context, ing *ClassifiedIngress) (*acmModel.Certificate, error) {
@@ -43,7 +43,9 @@ func (t *defaultModelBuildTask) buildACMCertificates(ctx context.Context, ing *C
 func (t *defaultModelBuildTask) buildCertificateResourceID(spec *acmModel.CertificateSpec, ing *ClassifiedIngress) string {
 	ingKey := fmt.Sprintf("%s/%s", ing.Ing.Namespace, ing.Ing.Name)
 	ingHash := fmt.Sprintf("%x", sha256.Sum256([]byte(ingKey)))[:8]
-	return fmt.Sprintf("%s/%s-%s", strings.ToLower(string(spec.Type)), spec.DomainName, ingHash)
+	// The resourceID becomes a tag value, which rejects '*' (ACM pattern [\p{L}\p{Z}\p{N}_.:/=+\-@]*).
+	domainName := strings.ReplaceAll(spec.DomainName, "*", "wildcard")
+	return fmt.Sprintf("%s/%s-%s", strings.ToLower(string(spec.Type)), domainName, ingHash)
 }
 
 func (t *defaultModelBuildTask) buildCertificateSpec(ctx context.Context, ing *ClassifiedIngress) (*acmModel.CertificateSpec, error) {

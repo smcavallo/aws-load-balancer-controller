@@ -3,13 +3,11 @@ package chained_gateway_tests
 import (
 	"testing"
 
-	"sigs.k8s.io/aws-load-balancer-controller/test/framework"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/test/e2e/gateway/alb_tests"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/test/e2e/gateway/nlb_tests"
 )
-
-var tf *framework.Framework
 
 func TestChainedGateway(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -17,7 +15,8 @@ func TestChainedGateway(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	var err error
-	tf, err = framework.InitFramework()
-	Expect(err).NotTo(HaveOccurred())
+	Expect(InitTF()).To(Succeed())
+	// Init imported packages' tf; their Describes are transitively registered here.
+	Expect(alb_tests.InitTF()).To(Succeed())
+	Expect(nlb_tests.InitTF()).To(Succeed())
 })

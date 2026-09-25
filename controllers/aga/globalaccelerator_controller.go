@@ -19,8 +19,9 @@ package controllers
 import (
 	"context"
 	"fmt"
-	gwbeta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 	"time"
+
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/aws/aws-sdk-go-v2/service/globalaccelerator/types"
 	"github.com/go-logr/logr"
@@ -30,9 +31,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aws/services"
-	agadeploy "sigs.k8s.io/aws-load-balancer-controller/pkg/deploy/aga"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aws/services"
+	agadeploy "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/deploy/aga"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/shared_constants"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -40,20 +41,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	agaapi "sigs.k8s.io/aws-load-balancer-controller/apis/aga/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/controllers/aga/eventhandlers"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aga"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/config"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/deploy"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/deploy/tracking"
-	ctrlerrors "sigs.k8s.io/aws-load-balancer-controller/pkg/error"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
-	lbcmetrics "sigs.k8s.io/aws-load-balancer-controller/pkg/metrics/lbc"
-	metricsutil "sigs.k8s.io/aws-load-balancer-controller/pkg/metrics/util"
-	agamodel "sigs.k8s.io/aws-load-balancer-controller/pkg/model/aga"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/model/core"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/runtime"
-	agastatus "sigs.k8s.io/aws-load-balancer-controller/pkg/status/aga"
+	agaapi "sigs.k8s.io/aws-load-balancer-controller/v3/apis/aga/v1beta1"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/controllers/aga/eventhandlers"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aga"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/config"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/deploy"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/deploy/tracking"
+	ctrlerrors "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/error"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
+	lbcmetrics "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/metrics/lbc"
+	metricsutil "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/metrics/util"
+	agamodel "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/aga"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/core"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/runtime"
+	agastatus "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/status/aga"
 	gwclientset "sigs.k8s.io/gateway-api/pkg/client/clientset/versioned"
 )
 
@@ -527,7 +528,7 @@ func (r *globalAcceleratorReconciler) setupGlobalAcceleratorWatches(c controller
 			loggerPrefix.WithName("referencegrant-handler"),
 		)
 
-		if err := c.Watch(source.Kind(mgr.GetCache(), &gwbeta1.ReferenceGrant{}, referenceGrantHandler)); err != nil {
+		if err := c.Watch(source.Kind(mgr.GetCache(), &gatewayv1.ReferenceGrant{}, referenceGrantHandler)); err != nil {
 			r.logger.Info("Failed to set up watch for ReferenceGrant resources, cross-namespace validation may be delayed", "error", err)
 		}
 	} else {

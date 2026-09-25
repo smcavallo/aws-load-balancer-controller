@@ -8,11 +8,11 @@ import (
 	networking "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	gatewayv1beta1 "sigs.k8s.io/aws-load-balancer-controller/apis/gateway/v1beta1"
-	annotations "sigs.k8s.io/aws-load-balancer-controller/pkg/annotations"
-	gwconstants "sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/constants"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/ingress2gateway/utils"
-	sharedconstants "sigs.k8s.io/aws-load-balancer-controller/pkg/shared_constants"
+	gatewayv1beta1 "sigs.k8s.io/aws-load-balancer-controller/v3/apis/gateway/v1"
+	annotations "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/annotations"
+	gwconstants "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/ingress2gateway/utils"
+	sharedconstants "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/shared_constants"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -462,7 +462,7 @@ func lookupNamedPort(namespace, svcName, portName string, servicesByKey map[stri
 func newHTTPRoute(name, namespace string, parentRefs []gwv1.ParentReference, hostnames []gwv1.Hostname, rules []gwv1.HTTPRouteRule) gwv1.HTTPRoute {
 	return gwv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: gwconstants.ALBRouteResourceGroupVersion,
+			APIVersion: gwconstants.GatewayResourceGroupVersion,
 			Kind:       sharedconstants.HTTPRouteKind,
 		},
 		ObjectMeta: metav1.ObjectMeta{

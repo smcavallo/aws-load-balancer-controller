@@ -13,7 +13,7 @@ import (
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/shared_constants"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	ec2sdk "github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -23,10 +23,10 @@ import (
 	networking "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/algorithm"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aws/services"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/runtime"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/algorithm"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aws/services"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -59,7 +59,8 @@ type BackendSGProvider interface {
 
 // NewBackendSGProvider constructs a new  defaultBackendSGProvider
 func NewBackendSGProvider(clusterName string, backendSG string, vpcID string,
-	ec2Client services.EC2, k8sClient client.Client, defaultTags map[string]string, enableGatewayCheck bool, logger logr.Logger) *defaultBackendSGProvider {
+	ec2Client services.EC2, k8sClient client.Client, defaultTags map[string]string, enableGatewayCheck bool,
+	albGatewayFinalizer string, nlbGatewayFinalizer string, logger logr.Logger) *defaultBackendSGProvider {
 	return &defaultBackendSGProvider{
 		vpcID:       vpcID,
 		clusterName: clusterName,
@@ -92,7 +93,7 @@ func NewBackendSGProvider(clusterName string, backendSG string, vpcID string,
 
 		checkGatewayFinalizersFunc: func(finalizers []string) bool {
 			for _, fin := range finalizers {
-				if fin == shared_constants.ALBGatewayFinalizer || fin == shared_constants.NLBGatewayFinalizer {
+				if fin == albGatewayFinalizer || fin == nlbGatewayFinalizer {
 					return true
 				}
 			}

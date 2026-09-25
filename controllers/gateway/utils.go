@@ -9,13 +9,17 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
-	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/apis/gateway/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/routeutils"
+	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/v3/apis/gateway/v1"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/routeutils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -204,4 +208,19 @@ func getServicesFromRoutes(listenerRouteMap map[int32][]routeutils.RouteDescript
 // isGatewayDeleting returns true if the gateway has a deletion timestamp set
 func isGatewayDeleting(gw *gwv1.Gateway) bool {
 	return gw.DeletionTimestamp != nil && !gw.DeletionTimestamp.IsZero()
+}
+
+func handleReconcileResult(req reconcile.Request, err error, logger logr.Logger, success func(name string, namespace string), fail func(name string, namespace string, err error)) (ctrl.Result, error) {
+	result, translatedError := runtime.HandleReconcileError(err, logger)
+	if translatedError == nil {
+		// Only declare success on a truly empty result (genuine completion).
+		// A pending requeue (either immediate via Requeue or delayed via RequeueAfter)
+		// means reconciliation is not done, so we must not declare success.
+		if !result.Requeue && result.RequeueAfter == 0 {
+			success(req.Name, req.Namespace)
+		}
+	} else {
+		fail(req.Name, req.Namespace, translatedError)
+	}
+	return result, translatedError
 }

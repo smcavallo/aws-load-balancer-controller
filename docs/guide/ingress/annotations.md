@@ -112,6 +112,9 @@ By default, Ingresses don't belong to any IngressGroup, and we treat it as a "im
 
         We'll add more fine-grained access-control in future versions.
 
+    !!!note "Exclusive Annotations"
+        Resource-level annotations with **Exclusive** merge semantics allow only one value across all Ingresses in an IngressGroup. If two Ingresses in the same IngressGroup specify conflicting values for an Exclusive annotation, the controller will fail with an error for the **entire IngressGroup** until the conflict is resolved — no updates will be applied to any member of the group. See the [Annotations table](#annotations) for which annotations use Exclusive vs Merge semantics.
+
     !!!note "Rename behavior"
         The ALB for an IngressGroup is found by searching for an AWS tag `ingress.k8s.aws/stack` tag with the name of the IngressGroup as its value. For an implicit IngressGroup, the value is `namespace/ingressname`.
 
@@ -276,17 +279,17 @@ Traffic Routing can be controlled with following annotations:
 
 - <a name="ipam-ipv4-pool-id">`alb.ingress.kubernetes.io/ipam-ipv4-pool-id`</a> Specifies the [IPv4 IPAM Pool ID](https://docs.aws.amazon.com/vpc/latest/ipam/tutorials-byoip-ipam-console-ipv4.html) which will be used by your load balancer to assign IP addresses.
 
-  !!!note ""
-  The chosen IPAM pool is always the prioritized source when assigning public IPv4 addresses.
-  If there are no more assignable IP addresses in the IPAM pool, AWS managed IPv4 addresses are assigned.
+    !!!note ""
+        The chosen IPAM pool is always the prioritized source when assigning public IPv4 addresses.
+        If there are no more assignable IP addresses in the IPAM pool, AWS managed IPv4 addresses are assigned.
 
-  !!!tip
-  To remove an IPAM pool associated to your ALB, remove the annotation from your ingress.
+    !!!tip
+        To remove an IPAM pool associated to your ALB, remove the annotation from your ingress.
 
-  !!!example
-  ```
-  alb.ingress.kubernetes.io/ipam-ipv4-pool-id: ipam-pool-0f995c17c00375b48
-  ```
+    !!!example
+        ```
+        alb.ingress.kubernetes.io/ipam-ipv4-pool-id: ipam-pool-0f995c17c00375b48
+        ```
 
 - <a name="actions">`alb.ingress.kubernetes.io/actions.${action-name}`</a> Provides a method for configuring custom actions on a listener, such as Redirect Actions.
 
@@ -697,7 +700,12 @@ Access control for LoadBalancer can be controlled with following annotations:
         alb.ingress.kubernetes.io/scheme: internal
         ```
 
+    !!!warning
+        Amazon ELB cannot change a load balancer's scheme in place; updating its `Scheme` property requires replacement. Therefore, changing the scheme from `internet-facing` to `internal`, or vice versa, causes the controller to create a replacement Application Load Balancer. Plan a traffic migration to avoid downtime.
+
 - <a name="inbound-cidrs">`alb.ingress.kubernetes.io/inbound-cidrs`</a> specifies the CIDRs that are allowed to access LoadBalancer.
+
+    The Load Balancer Controller canonicalizes CIDRs.
 
     !!!note "Merge Behavior"
         `inbound-cidrs` is merged across all Ingresses in IngressGroup, but is exclusive per listen-port.
@@ -810,6 +818,9 @@ ALB supports authentication with Cognito or OIDC. See [Authenticate Users Using 
         alb.ingress.kubernetes.io/auth-idp-oidc: '{"issuer":"https://example.com","authorizationEndpoint":"https://authorization.example.com","tokenEndpoint":"https://token.example.com","userInfoEndpoint":"https://userinfo.example.com","secretName":"my-k8s-secret"}'
         ```
 
+    !!!warning "Accessing OIDC secrets"
+        Anything that can create an Ingress in the same namespace as the secret that contains the OIDC information can use that secret to enable OIDC-based authentication on the Ingress. The AWS Load Balancer Controller uses its own RBAC permissions to retrieve the secret's contents in order to configure the ALB listener.
+  
 - <a name="auth-on-unauthenticated-request">`alb.ingress.kubernetes.io/auth-on-unauthenticated-request`</a> specifies the behavior if the user is not authenticated.
 
 	!!!info "options:"
@@ -1197,6 +1208,9 @@ Load balancer capacity unit reservation can be configured via following annotati
     !!!warning ""
         Only Regional WAF Classic is supported.
 
+    !!!warning "Security Risk"
+        Any Kubernetes user with RBAC permission to create/modify Ingress resources in the same IngressGroup can set the WAF Classic ACL for the entire shared ALB. Only use IngressGroup when all members are within your trust boundary. To mitigate, restrict group membership via `IngressClassParams.Spec.NamespaceSelector` or set `--disable-ingress-group-name-annotation` to prevent annotation-based group joining. See [IngressGroup Security Risk](#group.name) for details.
+
     !!!note ""
         When this annotation is absent or empty, the controller will keep LoadBalancer WAF Classic settings unchanged.
         To disable WAF Classic, explicitly set the annotation value to 'none'.
@@ -1213,6 +1227,9 @@ Load balancer capacity unit reservation can be configured via following annotati
 
     !!!warning ""
         Only Regional WAFv2 is supported.
+
+    !!!warning "Security Risk"
+        Any Kubernetes user with RBAC permission to create/modify Ingress resources in the same IngressGroup can set the WAFv2 ACL for the entire shared ALB. Only use IngressGroup when all members are within your trust boundary. To mitigate, pin WAF configuration via `IngressClassParams.Spec.WAFv2ACLArn`, restrict group membership via `IngressClassParams.Spec.NamespaceSelector`, or set `--disable-ingress-group-name-annotation` to prevent annotation-based group joining. See [IngressGroup Security Risk](#group.name) for details.
 
     !!!note ""
         When this annotation is absent or empty, the controller will keep LoadBalancer WAFv2 settings unchanged.
@@ -1236,6 +1253,9 @@ Load balancer capacity unit reservation can be configured via following annotati
 
     !!!warning ""
         Only Regional WAFv2 is supported.
+
+    !!!warning "Security Risk"
+        Any Kubernetes user with RBAC permission to create/modify Ingress resources in the same IngressGroup can set the WAFv2 ACL for the entire shared ALB. Only use IngressGroup when all members are within your trust boundary. To mitigate, pin WAF configuration via `IngressClassParams.Spec.WAFv2ACLArn`, restrict group membership via `IngressClassParams.Spec.NamespaceSelector`, or set `--disable-ingress-group-name-annotation` to prevent annotation-based group joining. See [IngressGroup Security Risk](#group.name) for details.
 
     !!!note ""
         When this annotation is absent or empty, the controller will keep LoadBalancer WAFv2 settings unchanged.

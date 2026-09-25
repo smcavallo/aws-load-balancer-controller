@@ -3,25 +3,23 @@ package crddetect
 import (
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/config"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/config"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
 )
 
 const (
 	// GatewayV1GroupVersion is the stable Gateway API group version.
 	GatewayV1GroupVersion = "gateway.networking.k8s.io/v1"
-	// GatewayV1Alpha2GroupVersion is the experimental Gateway API group version.
-	GatewayV1Alpha2GroupVersion = "gateway.networking.k8s.io/v1alpha2"
 	// LBCGatewayGroupVersion is the LBC-specific Gateway CRD group version.
-	LBCGatewayGroupVersion = "gateway.k8s.aws/v1beta1"
+	LBCGatewayGroupVersion = "gateway.k8s.aws/v1"
 )
 
 var (
 	// lbcGatewayKinds are the AWS vended CRDs required by both ALB and NLB gateway controllers.
 	lbcGatewayKinds = []string{"TargetGroupConfiguration", "LoadBalancerConfiguration", "ListenerRuleConfiguration"}
 
-	albKinds         = map[string][]string{GatewayV1GroupVersion: {"Gateway", "GatewayClass", "HTTPRoute", "GRPCRoute"}, LBCGatewayGroupVersion: lbcGatewayKinds}
-	nlbKinds         = map[string][]string{GatewayV1GroupVersion: {"Gateway", "GatewayClass", "TLSRoute"}, GatewayV1Alpha2GroupVersion: {"TCPRoute", "UDPRoute"}, LBCGatewayGroupVersion: lbcGatewayKinds}
+	albKinds         = map[string][]string{GatewayV1GroupVersion: {"Gateway", "GatewayClass", "HTTPRoute", "GRPCRoute", "ReferenceGrant"}, LBCGatewayGroupVersion: lbcGatewayKinds}
+	nlbKinds         = map[string][]string{GatewayV1GroupVersion: {"Gateway", "GatewayClass", "TLSRoute", "TCPRoute", "UDPRoute", "ReferenceGrant"}, LBCGatewayGroupVersion: lbcGatewayKinds}
 	listenerSetKinds = map[string][]string{GatewayV1GroupVersion: {"ListenerSet"}}
 )
 
@@ -40,7 +38,7 @@ func ApplyGatewayCRDDetection(client k8s.DiscoveryClient, featureGates config.Fe
 		return nil
 	}
 
-	availableResources, err := k8s.DetectCRDs(client, sets.New(GatewayV1Alpha2GroupVersion, GatewayV1GroupVersion, LBCGatewayGroupVersion))
+	availableResources, err := k8s.DetectCRDs(client, sets.New(GatewayV1GroupVersion, LBCGatewayGroupVersion))
 	if err != nil {
 		return err
 	}

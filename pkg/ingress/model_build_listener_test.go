@@ -9,13 +9,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	networking "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	elbv2api "sigs.k8s.io/aws-load-balancer-controller/apis/elbv2/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/annotations"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/config"
-	acmModel "sigs.k8s.io/aws-load-balancer-controller/pkg/model/acm"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/model/core"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/model/elbv2"
-	elbv2model "sigs.k8s.io/aws-load-balancer-controller/pkg/model/elbv2"
+	elbv2api "sigs.k8s.io/aws-load-balancer-controller/v3/apis/elbv2/v1beta1"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/annotations"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/config"
+	acmModel "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/acm"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/core"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/elbv2"
+	elbv2model "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/elbv2"
 )
 
 func Test_computeIngressListenPortConfigByPort_MutualAuthentication(t *testing.T) {
@@ -925,6 +925,144 @@ func Test_defaultModelBuildTask_buildListenerTags_FeatureGate(t *testing.T) {
 			for key, value := range tt.want {
 				assert.Contains(t, got, key)
 				assert.Equal(t, value, got[key])
+			}
+		})
+	}
+}
+
+func Test_defaultModelBuildTask_computeIngressExplicitInboundCIDRs(t *testing.T) {
+	type wantStruct struct {
+		ipv4CIDRs []string
+		ipv6CIDRs []string
+	}
+	tests := []struct {
+		name    string
+		ing     *ClassifiedIngress
+		want    wantStruct
+		wantErr bool
+	}{
+		{
+			name: "valid non-canonical IPv4 CIDR specified in IngressClassParams InboundCIDRs",
+			ing: &ClassifiedIngress{
+				IngClassConfig: ClassConfiguration{
+					IngClassParams: &elbv2api.IngressClassParams{
+						Spec: elbv2api.IngressClassParamsSpec{InboundCIDRs: []string{"100.68.0.18/18"}},
+					},
+				},
+			},
+			want: wantStruct{
+				ipv4CIDRs: []string{"100.68.0.0/18"},
+			},
+		},
+		{
+			name: "valid non-canonical IPv6 CIDR specified in IngressClassParams InboundCIDRs",
+			ing: &ClassifiedIngress{
+				IngClassConfig: ClassConfiguration{
+					IngClassParams: &elbv2api.IngressClassParams{
+						Spec: elbv2api.IngressClassParamsSpec{InboundCIDRs: []string{"fe80:0000:0000:0000::/64"}},
+					},
+				},
+			},
+			want: wantStruct{
+				ipv6CIDRs: []string{"fe80::/64"},
+			},
+		},
+		{
+			name: "valid non-canonical IPv4 and IPv6 CIDRs specified in IngressClassParams InboundCIDRs",
+			ing: &ClassifiedIngress{
+				IngClassConfig: ClassConfiguration{
+					IngClassParams: &elbv2api.IngressClassParams{
+						Spec: elbv2api.IngressClassParamsSpec{InboundCIDRs: []string{"100.68.0.18/18", "fe80:0000:0000:0000::/64"}},
+					},
+				},
+			},
+			want: wantStruct{
+				ipv4CIDRs: []string{"100.68.0.0/18"},
+				ipv6CIDRs: []string{"fe80::/64"},
+			},
+		},
+		{
+			name: "valid non-canonical IPv4 CIDR specified in annotation alb.ingress.kubernetes.io/inbound-cidrs",
+			ing: &ClassifiedIngress{
+				Ing: &networking.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"alb.ingress.kubernetes.io/inbound-cidrs": "100.68.0.18/18",
+						},
+					},
+				},
+			},
+			want: wantStruct{
+				ipv4CIDRs: []string{"100.68.0.0/18"},
+			},
+		},
+		{
+			name: "valid non-canonical IPv6 CIDR specified in annotation alb.ingress.kubernetes.io/inbound-cidrs",
+			ing: &ClassifiedIngress{
+				Ing: &networking.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"alb.ingress.kubernetes.io/inbound-cidrs": "fe80:0000:0000:0000::/64",
+						},
+					},
+				},
+			},
+			want: wantStruct{
+				ipv6CIDRs: []string{"fe80::/64"},
+			},
+		},
+		{
+			name: "valid non-canonical IPv4 and non-canonical IPv6 CIDRs specified in annotation alb.ingress.kubernetes.io/inbound-cidrs",
+			ing: &ClassifiedIngress{
+				Ing: &networking.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"alb.ingress.kubernetes.io/inbound-cidrs": "100.68.0.18/18,fe80:0000:0000:0000::/64",
+						},
+					},
+				},
+			},
+			want: wantStruct{
+				ipv4CIDRs: []string{"100.68.0.0/18"},
+				ipv6CIDRs: []string{"fe80::/64"},
+			},
+		},
+		{
+			name: "invalid IPv4 CIDR specified in IngressClassParams InboundCIDRs",
+			ing: &ClassifiedIngress{
+				IngClassConfig: ClassConfiguration{
+					IngClassParams: &elbv2api.IngressClassParams{
+						Spec: elbv2api.IngressClassParamsSpec{InboundCIDRs: []string{"10.0.0.11111/18"}},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid IPv4 CIDR specified in annotation alb.ingress.kubernetes.io/inbound-cidrs",
+			ing: &ClassifiedIngress{
+				Ing: &networking.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{
+							"alb.ingress.kubernetes.io/inbound-cidrs": "10.0.0.11111/18",
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := &defaultModelBuildTask{
+				annotationParser: annotations.NewSuffixAnnotationParser("alb.ingress.kubernetes.io"),
+			}
+			gotIpv4, gotIpv6, err := task.computeIngressExplicitInboundCIDRs(nil, tt.ing)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.Equal(t, tt.want.ipv4CIDRs, gotIpv4)
+				assert.Equal(t, tt.want.ipv6CIDRs, gotIpv6)
 			}
 		})
 	}

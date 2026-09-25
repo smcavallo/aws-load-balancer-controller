@@ -5,21 +5,21 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
-	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/apis/gateway/v1beta1"
-	elbv2model "sigs.k8s.io/aws-load-balancer-controller/pkg/model/elbv2"
+	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/v3/apis/gateway/v1"
+	elbv2model "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/elbv2"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // BuildHttpRuleConditions each match will be mapped to a ruleCondition, conditions within same match will be ANDed
 func BuildHttpRuleConditions(rule RulePrecedence) ([]elbv2model.RuleCondition, error) {
 	match := rule.HTTPMatch
-	hostnamesStringList := rule.CommonRulePrecedence.Hostnames
+	hostname := rule.CommonRulePrecedence.Hostname
 	var conditions []elbv2model.RuleCondition
-	if hostnamesStringList != nil && len(hostnamesStringList) > 0 {
+	if hostname != "" {
 		conditions = append(conditions, elbv2model.RuleCondition{
 			Field: elbv2model.RuleConditionFieldHostHeader,
 			HostHeaderConfig: &elbv2model.HostHeaderConditionConfig{
-				Values: hostnamesStringList,
+				Values: []string{hostname},
 			},
 		})
 	}
@@ -161,13 +161,13 @@ func buildHttpMethodCondition(method *gwv1.HTTPMethod) []elbv2model.RuleConditio
 
 func BuildGrpcRuleConditions(rule RulePrecedence) ([]elbv2model.RuleCondition, error) {
 	// handle host header
-	hostnamesStringList := rule.CommonRulePrecedence.Hostnames
+	hostname := rule.CommonRulePrecedence.Hostname
 	var conditions []elbv2model.RuleCondition
-	if hostnamesStringList != nil && len(hostnamesStringList) > 0 {
+	if hostname != "" {
 		conditions = append(conditions, elbv2model.RuleCondition{
 			Field: elbv2model.RuleConditionFieldHostHeader,
 			HostHeaderConfig: &elbv2model.HostHeaderConditionConfig{
-				Values: hostnamesStringList,
+				Values: []string{hostname},
 			},
 		})
 	}

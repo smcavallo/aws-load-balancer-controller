@@ -22,28 +22,28 @@ import (
 	"os"
 	"sync"
 
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aga"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/certs"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_utils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aga"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/certs"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/deploy"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/deploy/tracking"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/shared_utils"
 
 	"k8s.io/apimachinery/pkg/util/sets"
-	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/apis/gateway/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/controllers/gateway"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aws/services"
-	gateway_constants "sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/constants"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/crddetect"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/referencecounter"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/routeutils"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/inject/pod_readiness"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/inject/quic"
+	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/v3/apis/gateway/v1"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/controllers/gateway"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aws/services"
+	gateway_constants "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/crddetect"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/referencecounter"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/routeutils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/inject/pod_readiness"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/inject/quic"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
-	gwalpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
-	gwbeta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	"k8s.io/client-go/util/workqueue"
 
-	elbv2deploy "sigs.k8s.io/aws-load-balancer-controller/pkg/deploy/elbv2"
+	elbv2deploy "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/deploy/elbv2"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
@@ -53,28 +53,28 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"k8s.io/klog/v2"
-	agaapi "sigs.k8s.io/aws-load-balancer-controller/apis/aga/v1beta1"
-	elbv2api "sigs.k8s.io/aws-load-balancer-controller/apis/elbv2/v1beta1"
-	agacontroller "sigs.k8s.io/aws-load-balancer-controller/controllers/aga"
-	elbv2controller "sigs.k8s.io/aws-load-balancer-controller/controllers/elbv2"
-	"sigs.k8s.io/aws-load-balancer-controller/controllers/ingress"
-	"sigs.k8s.io/aws-load-balancer-controller/controllers/service"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aws"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aws/throttle"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/config"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/inject/albtargetcontrol"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
-	awsmetrics "sigs.k8s.io/aws-load-balancer-controller/pkg/metrics/aws"
-	lbcmetrics "sigs.k8s.io/aws-load-balancer-controller/pkg/metrics/lbc"
-	metricsutil "sigs.k8s.io/aws-load-balancer-controller/pkg/metrics/util"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/networking"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/runtime"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/targetgroupbinding"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/version"
-	agawebhook "sigs.k8s.io/aws-load-balancer-controller/webhooks/aga"
-	corewebhook "sigs.k8s.io/aws-load-balancer-controller/webhooks/core"
-	elbv2webhook "sigs.k8s.io/aws-load-balancer-controller/webhooks/elbv2"
-	networkingwebhook "sigs.k8s.io/aws-load-balancer-controller/webhooks/networking"
+	agaapi "sigs.k8s.io/aws-load-balancer-controller/v3/apis/aga/v1beta1"
+	elbv2api "sigs.k8s.io/aws-load-balancer-controller/v3/apis/elbv2/v1beta1"
+	agacontroller "sigs.k8s.io/aws-load-balancer-controller/v3/controllers/aga"
+	elbv2controller "sigs.k8s.io/aws-load-balancer-controller/v3/controllers/elbv2"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/controllers/ingress"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/controllers/service"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aws"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aws/throttle"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/config"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/inject/albtargetcontrol"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
+	awsmetrics "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/metrics/aws"
+	lbcmetrics "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/metrics/lbc"
+	metricsutil "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/metrics/util"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/networking"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/runtime"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/targetgroupbinding"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/version"
+	agawebhook "sigs.k8s.io/aws-load-balancer-controller/v3/webhooks/aga"
+	corewebhook "sigs.k8s.io/aws-load-balancer-controller/v3/webhooks/core"
+	elbv2webhook "sigs.k8s.io/aws-load-balancer-controller/v3/webhooks/elbv2"
+	networkingwebhook "sigs.k8s.io/aws-load-balancer-controller/v3/webhooks/networking"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -94,8 +94,6 @@ func init() {
 	_ = elbv2api.AddToScheme(scheme)
 	_ = elbv2gw.AddToScheme(scheme)
 	_ = gwv1.AddToScheme(scheme)
-	_ = gwalpha2.AddToScheme(scheme)
-	_ = gwbeta1.AddToScheme(scheme)
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -209,17 +207,22 @@ func main() {
 
 	tgArnMapper := shared_utils.NewTargetGroupNameToArnMapper(cloud.ELBV2())
 
+	azIDTranslator := networking.NewDefaultAZIDTranslator(cloud.EC2(), ctrl.Log.WithName("az-id-translator"))
 	tgbResManager := targetgroupbinding.NewDefaultResourceManager(mgr.GetClient(), cloud.ELBV2(),
-		podInfoRepo, networkingManager, vpcInfoProvider, multiClusterManager, lbcMetricsCollector,
+		podInfoRepo, networkingManager, vpcInfoProvider, azIDTranslator, multiClusterManager, lbcMetricsCollector,
 		cloud.VpcID(), controllerCFG.FeatureGates.Enabled(config.EndpointsFailOpen), controllerCFG.EnableEndpointSlices,
 		mgr.GetEventRecorderFor("targetGroupBinding"), ctrl.Log, controllerCFG.MaxTargetsPerTargetGroup, controllerCFG.TargetGroupBindingRequeueDuration)
 	backendSGProvider := networking.NewBackendSGProvider(controllerCFG.ClusterName, controllerCFG.BackendSecurityGroup,
-		cloud.VpcID(), cloud.EC2(), mgr.GetClient(), controllerCFG.DefaultTags, nlbGatewayEnabled || albGatewayEnabled, ctrl.Log.WithName("backend-sg-provider"))
+		cloud.VpcID(), cloud.EC2(), mgr.GetClient(), controllerCFG.DefaultTags, nlbGatewayEnabled || albGatewayEnabled,
+		controllerCFG.GatewayFinalizerConfig.ALBGatewayFinalizer, controllerCFG.GatewayFinalizerConfig.NLBGatewayFinalizer,
+		ctrl.Log.WithName("backend-sg-provider"))
 	sgResolver := networking.NewDefaultSecurityGroupResolver(cloud.EC2(), cloud.VpcID())
 	elbv2TaggingManager := elbv2deploy.NewDefaultTaggingManager(cloud.ELBV2(), cloud.VpcID(), controllerCFG.FeatureGates, cloud.RGT(), ctrl.Log)
+	requiredLabelKey, requiredLabelValue := config.ParseRequiredSecretsLabel(controllerCFG.RequiredSecretsLabel)
+	secretsManager := k8s.NewSecretsManager(clientSet, nil, ctrl.Log.WithName("secrets-manager"), requiredLabelKey, requiredLabelValue)
 	ingGroupReconciler := ingress.NewGroupReconciler(cloud, mgr.GetClient(), mgr.GetEventRecorderFor("ingress"),
 		finalizerManager, sgManager, networkingManager, sgReconciler, subnetResolver, elbv2TaggingManager,
-		controllerCFG, backendSGProvider, sgResolver, ctrl.Log.WithName("controllers").WithName("ingress"), lbcMetricsCollector, reconcileCounters,
+		controllerCFG, backendSGProvider, sgResolver, secretsManager, ctrl.Log.WithName("controllers").WithName("ingress"), lbcMetricsCollector, reconcileCounters,
 		targetGroupCollector, tgArnMapper)
 	svcReconciler := service.NewServiceReconciler(cloud, mgr.GetClient(), mgr.GetEventRecorderFor("service"),
 		finalizerManager, networkingManager, sgManager, sgReconciler, subnetResolver, vpcInfoProvider, elbv2TaggingManager,
@@ -342,6 +345,9 @@ func main() {
 			enabledControllers.Insert(gateway_constants.ALBGatewayController)
 		}
 
+		noOpSuccess := func(_, _ string) {}
+		noOpFailure := func(_, _ string, _ error) {}
+
 		gatewayClassReconciler := gateway.NewGatewayClassReconciler(
 			mgr.GetClient(),
 			mgr.GetEventRecorderFor(gateway_constants.GatewayClassController),
@@ -349,6 +355,8 @@ func main() {
 			finalizerManager,
 			enabledControllers,
 			mgr.GetLogger().WithName("gatewayclass-controller"),
+			noOpSuccess,
+			noOpFailure,
 		)
 
 		controller, err := gatewayClassReconciler.SetupWithManager(ctx, mgr)
@@ -369,6 +377,8 @@ func main() {
 			controllerCFG,
 			finalizerManager,
 			mgr.GetLogger().WithName("loadbalancerconfiguration-controller"),
+			noOpSuccess,
+			noOpFailure,
 		)
 
 		lbCfgController, err := loadbalancerConfigurationReconciler.SetupWithManager(ctx, mgr)
@@ -390,6 +400,8 @@ func main() {
 			serviceReferenceCounter,
 			finalizerManager,
 			mgr.GetLogger().WithName("targetgroupconfiguration-controller"),
+			noOpSuccess,
+			noOpFailure,
 		)
 
 		tgCfgController, err := targetGroupConfigurationReconciler.SetupWithManager(ctx, mgr)
@@ -410,6 +422,8 @@ func main() {
 			controllerCFG,
 			finalizerManager,
 			mgr.GetLogger().WithName("listenerruleconfiguration-controller"),
+			noOpSuccess,
+			noOpFailure,
 		)
 
 		listenerRuleCfgController, err := listenerRuleConfigurationReconciler.SetupWithManager(ctx, mgr)
@@ -526,62 +540,51 @@ func setupGatewayController(ctx context.Context, mgr ctrl.Manager, cfg *gatewayC
 	logger := ctrl.Log.WithName("controllers").WithName(controllerType)
 
 	var reconciler gateway.Reconciler
-	switch controllerType {
-	case gateway_constants.NLBGatewayController:
-		reconciler = gateway.NewNLBGatewayReconciler(
-			cfg.routeLoader,
-			cfg.serviceReferenceCounter,
-			cfg.cloud,
-			cfg.k8sClient,
-			cfg.certDiscovery,
-			cfg.certImporter,
-			mgr.GetEventRecorderFor(controllerType),
-			cfg.controllerCFG,
-			cfg.finalizerManager,
-			cfg.networkingManager,
-			cfg.sgReconciler,
-			cfg.sgManager,
-			cfg.elbv2TaggingManager,
-			cfg.subnetResolver,
-			cfg.vpcInfoProvider,
-			cfg.backendSGProvider,
-			cfg.sgResolver,
-			logger,
-			cfg.metricsCollector,
-			cfg.reconcileCounters,
-			cfg.targetGroupCollector,
-			cfg.targetGroupARNMapper,
-			cfg.listenerSetStatusUpdater,
-		)
-	case gateway_constants.ALBGatewayController:
-		reconciler = gateway.NewALBGatewayReconciler(
-			cfg.routeLoader,
-			cfg.cloud,
-			cfg.k8sClient,
-			cfg.certDiscovery,
-			cfg.certImporter,
-			cfg.serviceReferenceCounter,
-			mgr.GetEventRecorderFor(controllerType),
-			cfg.controllerCFG,
-			cfg.finalizerManager,
-			cfg.networkingManager,
-			cfg.sgReconciler,
-			cfg.sgManager,
-			cfg.elbv2TaggingManager,
-			cfg.subnetResolver,
-			cfg.vpcInfoProvider,
-			cfg.backendSGProvider,
-			cfg.sgResolver,
-			logger,
-			cfg.metricsCollector,
-			cfg.reconcileCounters,
-			cfg.targetGroupCollector,
-			cfg.targetGroupARNMapper,
-			cfg.listenerSetStatusUpdater,
-		)
-	default:
-		return fmt.Errorf("unknown controller type: %s", controllerType)
+
+	if controllerType != gateway_constants.ALBGatewayController && controllerType != gateway_constants.NLBGatewayController {
+		return fmt.Errorf("invalid controller type: %s", controllerType)
 	}
+
+	gatewayTagPrefix := gateway_constants.NLBGatewayTagPrefix
+
+	reconcilerCreator := gateway.NewNLBGatewayReconciler
+	if controllerType == gateway_constants.ALBGatewayController {
+		reconcilerCreator = gateway.NewALBGatewayReconciler
+		gatewayTagPrefix = gateway_constants.ALBGatewayTagPrefix
+	}
+
+	trackingProvider := tracking.NewDefaultProvider(gatewayTagPrefix, cfg.controllerCFG.ClusterName)
+	stackDeployer := deploy.NewDefaultStackDeployer(cfg.cloud, cfg.k8sClient, cfg.networkingManager, cfg.sgManager, cfg.sgReconciler, cfg.elbv2TaggingManager, cfg.controllerCFG, gatewayTagPrefix, logger, cfg.metricsCollector, controllerType, true, cfg.targetGroupCollector, controllerType == gateway_constants.NLBGatewayController)
+
+	reconciler = reconcilerCreator(
+		cfg.routeLoader,
+		cfg.serviceReferenceCounter,
+		cfg.cloud,
+		cfg.k8sClient,
+		cfg.certDiscovery,
+		cfg.certImporter,
+		mgr.GetEventRecorderFor(controllerType),
+		cfg.controllerCFG,
+		cfg.finalizerManager,
+		cfg.elbv2TaggingManager,
+		trackingProvider,
+		stackDeployer,
+		cfg.subnetResolver,
+		cfg.vpcInfoProvider,
+		cfg.backendSGProvider,
+		cfg.sgResolver,
+		logger,
+		cfg.metricsCollector,
+		cfg.reconcileCounters,
+		cfg.targetGroupARNMapper,
+		cfg.listenerSetStatusUpdater,
+		func(_, _ string) {
+			// We don't track anything in this callback
+		},
+		func(_, _ string, err error) {
+			// We don't track anything in this callback
+		},
+	)
 
 	controller, err := reconciler.SetupWithManager(ctx, mgr)
 	if err != nil {
@@ -602,7 +605,8 @@ func loadControllerConfig() (config.ControllerConfig, error) {
 		AWSConfig: aws.CloudConfig{
 			ThrottleConfig: defaultAWSThrottleCFG,
 		},
-		FeatureGates: config.NewFeatureGates(),
+		FeatureGates:           config.NewFeatureGates(),
+		GatewayFinalizerConfig: config.NewDefaultGatewayFinalizerConfig(),
 	}
 
 	fs := pflag.NewFlagSet("", pflag.ExitOnError)

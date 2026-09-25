@@ -5,8 +5,10 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"sigs.k8s.io/aws-load-balancer-controller/test/framework"
-	"sigs.k8s.io/aws-load-balancer-controller/test/framework/utils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/test/e2e/gateway/alb_tests"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/test/e2e/gateway/nlb_tests"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/test/framework"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/test/framework/utils"
 )
 
 var tf *framework.Framework
@@ -24,4 +26,7 @@ var _ = BeforeSuite(func() {
 	if !utils.IsCommercialPartition(tf.Options.AWSRegion) {
 		Skip("GlobalAccelerator is only available in commercial AWS partition")
 	}
+	// Init imported packages' tf; their Describes are transitively registered here.
+	Expect(alb_tests.InitTF()).To(Succeed())
+	Expect(nlb_tests.InitTF()).To(Succeed())
 })

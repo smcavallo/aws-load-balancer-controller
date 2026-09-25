@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_constants"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_utils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/shared_constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/shared_utils"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -17,12 +17,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/annotations"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/equality"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/model/core"
-	elbv2model "sigs.k8s.io/aws-load-balancer-controller/pkg/model/elbv2"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/networking"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/annotations"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/equality"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/core"
+	elbv2model "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/elbv2"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/networking"
 )
 
 // FrontendNlbListenerConfig defines the configuration for an NLB listener
@@ -106,7 +106,7 @@ func (t *defaultModelBuildTask) buildFrontendNlbScheme(ctx context.Context, alb 
 	return t.defaultScheme, nil
 }
 
-func (t *defaultModelBuildTask) validateAndResolveSubnets(ctx context.Context, explicitSubnetNameOrIDsList [][]string, scheme elbv2model.LoadBalancerScheme) ([]ec2types.Subnet, error) {
+func (t *defaultModelBuildTask) validateAndResolveSubnets(ctx context.Context, explicitSubnetNameOrIDsList [][]string, scheme elbv2model.LoadBalancerScheme, ipAddressType elbv2model.IPAddressType) ([]ec2types.Subnet, error) {
 	if len(explicitSubnetNameOrIDsList) != 0 {
 		// Check all ingresses have the same subnets
 		chosenSubnetNameOrIDs := explicitSubnetNameOrIDsList[0]
@@ -119,6 +119,7 @@ func (t *defaultModelBuildTask) validateAndResolveSubnets(ctx context.Context, e
 		chosenSubnets, err := t.subnetsResolver.ResolveViaNameOrIDSlice(ctx, chosenSubnetNameOrIDs,
 			networking.WithSubnetsResolveLBType(elbv2model.LoadBalancerTypeNetwork),
 			networking.WithSubnetsResolveLBScheme(scheme),
+			networking.WithSubnetsResolveLBIPAddressType(ipAddressType),
 		)
 		if err != nil {
 			return nil, err
@@ -128,7 +129,9 @@ func (t *defaultModelBuildTask) validateAndResolveSubnets(ctx context.Context, e
 
 	// If no explicit subnets, discover public or private subnets based on scheme
 	chosenSubnets, err := t.subnetsResolver.ResolveViaDiscovery(ctx,
+		networking.WithSubnetsResolveLBType(elbv2model.LoadBalancerTypeNetwork),
 		networking.WithSubnetsResolveLBScheme(scheme),
+		networking.WithSubnetsResolveLBIPAddressType(ipAddressType),
 	)
 	if err != nil {
 		return nil, err
@@ -152,7 +155,7 @@ func (t *defaultModelBuildTask) validateEIPAllocations(eipAllocationsList [][]st
 	return []string{}, nil
 }
 
-func (t *defaultModelBuildTask) buildFrontendNlbSubnetMappings(ctx context.Context, scheme elbv2model.LoadBalancerScheme) ([]elbv2model.SubnetMapping, error) {
+func (t *defaultModelBuildTask) buildFrontendNlbSubnetMappings(ctx context.Context, scheme elbv2model.LoadBalancerScheme, ipAddressType elbv2model.IPAddressType) ([]elbv2model.SubnetMapping, error) {
 	var explicitSubnetNameOrIDsList [][]string
 	var eipAllocationsList [][]string
 	// Read annotations
@@ -167,7 +170,7 @@ func (t *defaultModelBuildTask) buildFrontendNlbSubnetMappings(ctx context.Conte
 		}
 	}
 
-	chosenSubnets, err := t.validateAndResolveSubnets(ctx, explicitSubnetNameOrIDsList, scheme)
+	chosenSubnets, err := t.validateAndResolveSubnets(ctx, explicitSubnetNameOrIDsList, scheme, ipAddressType)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +266,7 @@ func (t *defaultModelBuildTask) buildFrontendNlbSpec(ctx context.Context, scheme
 		securityGroups = alb.Spec.SecurityGroups
 	}
 
-	subnetMappings, err := t.buildFrontendNlbSubnetMappings(ctx, scheme)
+	subnetMappings, err := t.buildFrontendNlbSubnetMappings(ctx, scheme, alb.Spec.IPAddressType)
 	if err != nil {
 		return elbv2model.LoadBalancerSpec{}, err
 	}

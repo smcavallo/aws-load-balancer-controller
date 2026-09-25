@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	networking "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/annotations"
-	acmModel "sigs.k8s.io/aws-load-balancer-controller/pkg/model/acm"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/model/core"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/annotations"
+	acmModel "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/acm"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/core"
 )
 
 func Test_buildACMCertificates(t *testing.T) {
@@ -106,6 +106,35 @@ func Test_buildACMCertificates(t *testing.T) {
 				},
 			},
 			wantCertSpec: acmModel.CertificateSpec{Type: acmtypes.CertificateTypeAmazonIssued, DomainName: "example.com", SubjectAlternativeNames: []string{"example.com", "otherexample.com", "yetanotherexample.com"}, ValidationMethod: acmtypes.ValidationMethodDns, Tags: map[string]string{}},
+		},
+		{
+			name: "Build certificate for an all-wildcard ingress keeps the wildcard DomainName",
+			fields: fields{
+				ingGroup: Group{
+					ID: GroupID{Name: "explicit-group"},
+					Members: []ClassifiedIngress{
+						{
+							Ing: &networking.Ingress{
+								ObjectMeta: metav1.ObjectMeta{
+									Namespace: "awesome-ns",
+									Name:      "ing-all-wild",
+									Annotations: map[string]string{
+										"alb.ingress.kubernetes.io/listen-ports":    `[{"HTTP": 80}, {"HTTPS": 443}]`,
+										"alb.ingress.kubernetes.io/create-acm-cert": `true`,
+									},
+								},
+								Spec: networking.IngressSpec{
+									Rules: []networking.IngressRule{
+										{Host: "*.app.example.com"},
+										{Host: "*.other.example.com"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCertSpec: acmModel.CertificateSpec{Type: acmtypes.CertificateTypeAmazonIssued, DomainName: "*.app.example.com", SubjectAlternativeNames: []string{"*.app.example.com", "*.other.example.com"}, ValidationMethod: acmtypes.ValidationMethodDns, Tags: map[string]string{}},
 		},
 		{
 			name: "Build certificate for certificate-arn pinned ingress",
@@ -247,4 +276,20 @@ func Test_buildACMCertificates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_buildCertificateResourceID(t *testing.T) {
+	task := &defaultModelBuildTask{}
+	ing := &ClassifiedIngress{
+		Ing: &networking.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "awesome-ns", Name: "ing-wild"},
+		},
+	}
+	got := task.buildCertificateResourceID(&acmModel.CertificateSpec{
+		Type:       acmtypes.CertificateTypeAmazonIssued,
+		DomainName: "*.app.example.com",
+	}, ing)
+
+	assert.NotContains(t, got, "*")
+	assert.Contains(t, got, "wildcard.app.example.com")
 }

@@ -9,14 +9,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
-	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/apis/gateway/v1beta1"
-	gatewayclasseventhandlers "sigs.k8s.io/aws-load-balancer-controller/controllers/gateway/eventhandlers/gatewayclass"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/config"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/constants"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/gatewayutils"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/runtime"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_constants"
+	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/v3/apis/gateway/v1"
+	gatewayclasseventhandlers "sigs.k8s.io/aws-load-balancer-controller/v3/controllers/gateway/eventhandlers/gatewayclass"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/config"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/gatewayutils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -35,7 +33,7 @@ const (
 )
 
 // NewGatewayClassReconciler constructs a reconciler that responds to gateway class object changes
-func NewGatewayClassReconciler(k8sClient client.Client, eventRecorder record.EventRecorder, controllerConfig config.ControllerConfig, finalizerManager k8s.FinalizerManager, enabledControllers sets.Set[string], logger logr.Logger) Reconciler {
+func NewGatewayClassReconciler(k8sClient client.Client, eventRecorder record.EventRecorder, controllerConfig config.ControllerConfig, finalizerManager k8s.FinalizerManager, enabledControllers sets.Set[string], logger logr.Logger, successCallback func(name string, namespace string), errorCallBack func(name string, namespace string, err error)) Reconciler {
 
 	return &gatewayClassReconciler{
 		k8sClient:                   k8sClient,
@@ -43,12 +41,15 @@ func NewGatewayClassReconciler(k8sClient client.Client, eventRecorder record.Eve
 		logger:                      logger,
 		enabledControllers:          enabledControllers,
 		finalizerManager:            finalizerManager,
+		finalizer:                   controllerConfig.GatewayFinalizerConfig.GatewayClassFinalizer,
 		workers:                     controllerConfig.GatewayClassMaxConcurrentReconciles,
 		updateGwClassAcceptedFn:     updateGatewayClassAcceptedCondition,
 		updateLastProcessedConfigFn: updateGatewayClassLastProcessedConfig,
 		configResolverFn:            gatewayutils.ResolveLoadBalancerConfig,
 		defaultTGCResolverFn:        lookUpDefaultTGCByName,
 		gatewayResolverFn:           gatewayutils.GetGatewaysManagedByGatewayClass,
+		successCallback:             successCallback,
+		errorCallBack:               errorCallBack,
 	}
 }
 
@@ -59,6 +60,7 @@ type gatewayClassReconciler struct {
 	logger             logr.Logger
 	enabledControllers sets.Set[string]
 	finalizerManager   k8s.FinalizerManager
+	finalizer          string
 	workers            int
 
 	updateGwClassAcceptedFn     func(ctx context.Context, k8sClient client.Client, gwClass *gwv1.GatewayClass, status metav1.ConditionStatus, reason string, message string) error
@@ -66,6 +68,8 @@ type gatewayClassReconciler struct {
 	configResolverFn            func(ctx context.Context, k8sClient client.Client, reference *gwv1.ParametersReference) (*elbv2gw.LoadBalancerConfiguration, error)
 	defaultTGCResolverFn        func(ctx context.Context, k8sClient client.Client, name, namespace string) (*elbv2gw.TargetGroupConfiguration, error)
 	gatewayResolverFn           func(ctx context.Context, k8sClient client.Client, gwClass *gwv1.GatewayClass) ([]*gwv1.Gateway, error)
+	successCallback             func(name string, namespace string)
+	errorCallBack               func(name string, namespace string, err error)
 }
 
 func (r *gatewayClassReconciler) SetupWatches(_ context.Context, ctrl controller.Controller, mgr ctrl.Manager, _ *kubernetes.Clientset) error {
@@ -105,7 +109,7 @@ func (r *gatewayClassReconciler) SetupWatches(_ context.Context, ctrl controller
 // +kubebuilder:rbac:groups=gateway.k8s.aws,resources=loadbalancerconfigurations,verbs=get;list;watch
 func (r *gatewayClassReconciler) Reconcile(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
 	err := r.reconcile(ctx, req)
-	return runtime.HandleReconcileError(err, r.logger)
+	return handleReconcileResult(req, err, r.logger, r.successCallback, r.errorCallBack)
 }
 
 func (r *gatewayClassReconciler) reconcile(ctx context.Context, req reconcile.Request) error {
@@ -128,8 +132,8 @@ func (r *gatewayClassReconciler) reconcile(ctx context.Context, req reconcile.Re
 }
 
 func (r *gatewayClassReconciler) handleUpdate(ctx context.Context, gwClass *gwv1.GatewayClass) error {
-	if !k8s.HasFinalizer(gwClass, shared_constants.GatewayClassFinalizer) {
-		err := r.finalizerManager.AddFinalizers(context.Background(), gwClass, shared_constants.GatewayClassFinalizer)
+	if !k8s.HasFinalizer(gwClass, r.finalizer) {
+		err := r.finalizerManager.AddFinalizers(context.Background(), gwClass, r.finalizer)
 		if err != nil {
 			return err
 		}
@@ -177,7 +181,7 @@ func (r *gatewayClassReconciler) handleUpdate(ctx context.Context, gwClass *gwv1
 }
 
 func (r *gatewayClassReconciler) handleDelete(ctx context.Context, gwClass *gwv1.GatewayClass) error {
-	if !k8s.HasFinalizer(gwClass, shared_constants.GatewayClassFinalizer) {
+	if !k8s.HasFinalizer(gwClass, r.finalizer) {
 		return nil
 	}
 
@@ -188,7 +192,7 @@ func (r *gatewayClassReconciler) handleDelete(ctx context.Context, gwClass *gwv1
 	if len(refCount) != 0 {
 		return fmt.Errorf("unable to delete GatewayClass [%+v], as it is still referenced by Gateways", gwClass.Name)
 	}
-	return r.finalizerManager.RemoveFinalizers(ctx, gwClass, shared_constants.GatewayClassFinalizer)
+	return r.finalizerManager.RemoveFinalizers(ctx, gwClass, r.finalizer)
 }
 
 func (r *gatewayClassReconciler) getNotFoundMessage(paramRef *gwv1.ParametersReference) string {

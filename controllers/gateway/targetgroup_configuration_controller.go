@@ -11,14 +11,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/record"
-	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/apis/gateway/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/config"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/constants"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/gatewayutils"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/referencecounter"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/runtime"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_constants"
+	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/v3/apis/gateway/v1"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/config"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/gatewayutils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/referencecounter"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -29,16 +27,19 @@ import (
 )
 
 // NewTargetGroupConfigurationReconciler constructs a reconciler that responds to targetgroup configuration changes
-func NewTargetGroupConfigurationReconciler(k8sClient client.Client, eventRecorder record.EventRecorder, controllerConfig config.ControllerConfig, serviceReferenceCounter referencecounter.ServiceReferenceCounter, finalizerManager k8s.FinalizerManager, logger logr.Logger) Reconciler {
+func NewTargetGroupConfigurationReconciler(k8sClient client.Client, eventRecorder record.EventRecorder, controllerConfig config.ControllerConfig, serviceReferenceCounter referencecounter.ServiceReferenceCounter, finalizerManager k8s.FinalizerManager, logger logr.Logger, successCallback func(name string, namespace string), errorCallBack func(name string, namespace string, err error)) Reconciler {
 
 	return &targetgroupConfigurationReconciler{
 		k8sClient:               k8sClient,
 		eventRecorder:           eventRecorder,
 		logger:                  logger,
 		finalizerManager:        finalizerManager,
+		finalizer:               controllerConfig.GatewayFinalizerConfig.TargetGroupConfigurationFinalizer,
 		serviceReferenceCounter: serviceReferenceCounter,
 		gwRetrieveFn:            gatewayutils.GetGatewaysManagedByLBController,
 		workers:                 controllerConfig.GatewayClassMaxConcurrentReconciles,
+		successCallback:         successCallback,
+		errorCallBack:           errorCallBack,
 	}
 }
 
@@ -48,10 +49,14 @@ type targetgroupConfigurationReconciler struct {
 	logger                  logr.Logger
 	eventRecorder           record.EventRecorder
 	finalizerManager        k8s.FinalizerManager
+	finalizer               string
 	serviceReferenceCounter referencecounter.ServiceReferenceCounter
 
 	gwRetrieveFn func(ctx context.Context, k8sClient client.Client, gwController string) ([]*gwv1.Gateway, error)
 	workers      int
+
+	successCallback func(name string, namespace string)
+	errorCallBack   func(name string, namespace string, err error)
 }
 
 func (r *targetgroupConfigurationReconciler) SetupWatches(_ context.Context, ctrl controller.Controller, mgr ctrl.Manager, _ *kubernetes.Clientset) error {
@@ -64,7 +69,8 @@ func (r *targetgroupConfigurationReconciler) SetupWatches(_ context.Context, ctr
 }
 
 func (r *targetgroupConfigurationReconciler) Reconcile(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
-	return runtime.HandleReconcileError(r.reconcile(ctx, req), r.logger)
+	err := r.reconcile(ctx, req)
+	return handleReconcileResult(req, err, r.logger, r.successCallback, r.errorCallBack)
 }
 
 func (r *targetgroupConfigurationReconciler) reconcile(ctx context.Context, req reconcile.Request) error {
@@ -82,14 +88,14 @@ func (r *targetgroupConfigurationReconciler) reconcile(ctx context.Context, req 
 }
 
 func (r *targetgroupConfigurationReconciler) handleUpdate(tgConf *elbv2gw.TargetGroupConfiguration) error {
-	if k8s.HasFinalizer(tgConf, shared_constants.TargetGroupConfigurationFinalizer) {
+	if k8s.HasFinalizer(tgConf, r.finalizer) {
 		return nil
 	}
-	return r.finalizerManager.AddFinalizers(context.Background(), tgConf, shared_constants.TargetGroupConfigurationFinalizer)
+	return r.finalizerManager.AddFinalizers(context.Background(), tgConf, r.finalizer)
 }
 
 func (r *targetgroupConfigurationReconciler) handleDelete(tgConf *elbv2gw.TargetGroupConfiguration) error {
-	if !k8s.HasFinalizer(tgConf, shared_constants.TargetGroupConfigurationFinalizer) {
+	if !k8s.HasFinalizer(tgConf, r.finalizer) {
 		return nil
 	}
 
@@ -123,7 +129,7 @@ func (r *targetgroupConfigurationReconciler) handleDelete(tgConf *elbv2gw.Target
 		if inUseLBC != "" {
 			return fmt.Errorf("default targetgroup configuration [%+v] is still in use by LoadBalancerConfiguration [%s]", k8s.NamespacedName(tgConf), inUseLBC)
 		}
-		return r.finalizerManager.RemoveFinalizers(context.Background(), tgConf, shared_constants.TargetGroupConfigurationFinalizer)
+		return r.finalizerManager.RemoveFinalizers(context.Background(), tgConf, r.finalizer)
 	}
 
 	svcReference := types.NamespacedName{
@@ -151,7 +157,7 @@ func (r *targetgroupConfigurationReconciler) handleDelete(tgConf *elbv2gw.Target
 			return fmt.Errorf("targetgroup configuration [%+v] is still in use", k8s.NamespacedName(tgConf))
 		}
 	}
-	return r.finalizerManager.RemoveFinalizers(context.Background(), tgConf, shared_constants.TargetGroupConfigurationFinalizer)
+	return r.finalizerManager.RemoveFinalizers(context.Background(), tgConf, r.finalizer)
 }
 
 // isDefaultTGCInUse checks if any LoadBalancerConfiguration in the same namespace references

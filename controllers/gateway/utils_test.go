@@ -7,13 +7,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/apis/gateway/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/gateway/routeutils"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/k8s"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/testutils"
+	"k8s.io/apimachinery/pkg/types"
+	elbv2gw "sigs.k8s.io/aws-load-balancer-controller/v3/apis/gateway/v1"
+	ctrlerrors "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/error"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/gateway/routeutils"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/k8s"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/testutils"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -993,6 +999,127 @@ func Test_generateRouteList(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			res := generateRouteList(tc.routes)
 			assert.Equal(t, tc.expected, res)
+		})
+	}
+}
+
+func Test_handleReconcileResult(t *testing.T) {
+	genericErr := errors.New("something went wrong")
+	wrappedErr := &ctrlerrors.ErrorWithMetrics{Err: genericErr}
+	// A requeue error wrapped in ErrorWithMetrics should still be detected as a requeue.
+	wrappedRequeueErr := &ctrlerrors.ErrorWithMetrics{Err: ctrlerrors.NewRequeueNeeded("dependency not ready")}
+
+	testCases := []struct {
+		name                string
+		err                 error
+		expectedResult      ctrl.Result
+		expectErr           bool
+		expectedErr         error
+		expectSuccessCalled bool
+		expectFailCalled    bool
+	}{
+		{
+			name:                "nil error triggers success callback",
+			err:                 nil,
+			expectedResult:      ctrl.Result{},
+			expectErr:           false,
+			expectSuccessCalled: true,
+			expectFailCalled:    false,
+		},
+		{
+			name:                "requeue needed after error does not trigger any callback",
+			err:                 ctrlerrors.NewRequeueNeededAfter("dependency not ready", 30*time.Second),
+			expectedResult:      ctrl.Result{RequeueAfter: 30 * time.Second},
+			expectErr:           false,
+			expectSuccessCalled: false,
+			expectFailCalled:    false,
+		},
+		{
+			name:                "requeue needed error does not trigger any callback",
+			err:                 ctrlerrors.NewRequeueNeeded("dependency not ready"),
+			expectedResult:      ctrl.Result{Requeue: true},
+			expectErr:           false,
+			expectSuccessCalled: false,
+			expectFailCalled:    false,
+		},
+		{
+			name:                "generic error triggers fail callback and returns error",
+			err:                 genericErr,
+			expectedResult:      ctrl.Result{},
+			expectErr:           true,
+			expectedErr:         genericErr,
+			expectSuccessCalled: false,
+			expectFailCalled:    true,
+		},
+		{
+			// HandleReconcileError unwraps ErrorWithMetrics only to classify it, but returns the
+			// original wrapper as the error, so fail receives the wrapper unchanged.
+			name:                "wrapped error with metrics triggers fail callback with original wrapper",
+			err:                 wrappedErr,
+			expectedResult:      ctrl.Result{},
+			expectErr:           true,
+			expectedErr:         wrappedErr,
+			expectSuccessCalled: false,
+			expectFailCalled:    true,
+		},
+		{
+			name:                "requeue error wrapped in metrics is detected and does not trigger any callback",
+			err:                 wrappedRequeueErr,
+			expectedResult:      ctrl.Result{Requeue: true},
+			expectErr:           false,
+			expectSuccessCalled: false,
+			expectFailCalled:    false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var successCalled, failCalled bool
+			var gotSuccessName, gotSuccessNamespace string
+			var gotFailName, gotFailNamespace string
+			var gotFailErr error
+
+			success := func(name string, namespace string) {
+				successCalled = true
+				gotSuccessName = name
+				gotSuccessNamespace = namespace
+			}
+			fail := func(name string, namespace string, err error) {
+				failCalled = true
+				gotFailName = name
+				gotFailNamespace = namespace
+				gotFailErr = err
+			}
+
+			req := reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "my-gateway",
+					Namespace: "my-namespace",
+				},
+			}
+
+			result, err := handleReconcileResult(req, tc.err, logr.Discard(), success, fail)
+
+			assert.Equal(t, tc.expectedResult, result)
+			if tc.expectErr {
+				assert.Error(t, err)
+				assert.Equal(t, tc.expectedErr, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			assert.Equal(t, tc.expectSuccessCalled, successCalled)
+			assert.Equal(t, tc.expectFailCalled, failCalled)
+
+			if tc.expectSuccessCalled {
+				assert.Equal(t, req.Name, gotSuccessName)
+				assert.Equal(t, req.Namespace, gotSuccessNamespace)
+			}
+			if tc.expectFailCalled {
+				assert.Equal(t, req.Name, gotFailName)
+				assert.Equal(t, req.Namespace, gotFailNamespace)
+				assert.Equal(t, tc.expectedErr, gotFailErr)
+			}
 		})
 	}
 }

@@ -255,6 +255,7 @@ type LoadBalancerConfigurationSpec struct {
 	SecurityGroupPrefixes *[]string `json:"securityGroupPrefixes,omitempty"`
 
 	// sourceRanges an optional list of CIDRs that are allowed to access the LB.
+	// IPv4 and IPv6 CIDRs are canonicalized. Defaults to 0.0.0.0/0 and ::/0.
 	// +optional
 	SourceRanges *[]string `json:"sourceRanges,omitempty"`
 
@@ -317,7 +318,7 @@ type LoadBalancerConfigurationStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:storageversion
+// +kubebuilder:deprecatedversion:warning="gateway.k8s.aws/v1beta1 LoadBalancerConfiguration is deprecated; use gateway.k8s.aws/v1 instead"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 // LoadBalancerConfiguration is the Schema for the LoadBalancerConfiguration API
 type LoadBalancerConfiguration struct {

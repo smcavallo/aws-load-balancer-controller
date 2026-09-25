@@ -1,18 +1,19 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/inject/pod_readiness"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/inject/quic"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/shared_constants"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/inject/pod_readiness"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/inject/quic"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/shared_constants"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aws"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/model/elbv2"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aws"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/elbv2"
 )
 
 const (
@@ -40,6 +41,7 @@ const (
 	flagDisableRestrictedSGRules                     = "disable-restricted-sg-rules"
 	flagMaxTargetsPerTargetGroup                     = "max-targets-per-target-group"
 	flagTargetGroupBindingRequeueDuration            = "targetgroupbinding-requeue-duration"
+	flagRequiredSecretsLabel                         = "required-secrets-label"
 	defaultLogLevel                                  = "info"
 	defaultGlobalAcceleratorMaxConcurrentReconciles  = 1
 	defaultMaxConcurrentReconciles                   = 3
@@ -89,6 +91,10 @@ type ControllerConfig struct {
 	AddonsConfig AddonsConfig
 	// Configurations for the Service controller
 	ServiceConfig ServiceConfig
+	// GatewayFinalizerConfig defines the finalizers the controller attaches to Gateway API
+	// related resources. It is configured ad-hoc (programmatically) rather than via flags;
+	// see config.NewDefaultGatewayFinalizerConfig for the built-in defaults.
+	GatewayFinalizerConfig GatewayFinalizerConfig
 
 	// Default AWS Tags that will be applied to all AWS resources managed by this controller.
 	DefaultTags map[string]string
@@ -158,6 +164,10 @@ type ControllerConfig struct {
 	// for AWS resources to update.
 	TargetGroupBindingRequeueDuration time.Duration
 
+	// RequiredSecretsLabel specifies a required label (key=value) that Secrets must have to be read by the controller.
+	// By default, no label is required and the controller can read all Secrets.
+	RequiredSecretsLabel string
+
 	FeatureGates FeatureGates
 }
 
@@ -210,6 +220,8 @@ func (cfg *ControllerConfig) BindFlags(fs *pflag.FlagSet) {
 		"Maximum number of targets that can be added to an ELB instance. Use this to prevent TargetGroup quotas being exceeded from blocking reconciliation.")
 	fs.DurationVar(&cfg.TargetGroupBindingRequeueDuration, flagTargetGroupBindingRequeueDuration, defaultTargetGroupBindingRequeuDuration,
 		"Duration after which TargetGroupBinding will be requeued for reconciliation when it's waiting for AWS resources to update.")
+	fs.StringVar(&cfg.RequiredSecretsLabel, flagRequiredSecretsLabel, "",
+		"Required label (key=value) that Secrets must have to be read by the controller")
 	cfg.FeatureGates.BindFlags(fs)
 	cfg.AWSConfig.BindFlags(fs)
 	cfg.RuntimeConfig.BindFlags(fs)
@@ -246,6 +258,9 @@ func (cfg *ControllerConfig) Validate() error {
 		return err
 	}
 	if err := cfg.validateManageBackendSecurityGroupRulesConfiguration(); err != nil {
+		return err
+	}
+	if err := cfg.validateRequiredSecretsLabel(); err != nil {
 		return err
 	}
 	return nil
@@ -312,4 +327,29 @@ func (cfg *ControllerConfig) validateManageBackendSecurityGroupRulesConfiguratio
 		return errors.Errorf("backend security group must be enabled when manage backend security group rule is enabled")
 	}
 	return nil
+}
+
+func (cfg *ControllerConfig) validateRequiredSecretsLabel() error {
+	if cfg.RequiredSecretsLabel == "" {
+		return nil
+	}
+	parts := strings.SplitN(cfg.RequiredSecretsLabel, "=", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("invalid value %q for --%s: must be in key=value format",
+			cfg.RequiredSecretsLabel, flagRequiredSecretsLabel)
+	}
+	return nil
+}
+
+// ParseRequiredSecretsLabel splits a "key=value" string into its key and value parts.
+// Returns empty strings when input is empty.
+func ParseRequiredSecretsLabel(label string) (string, string) {
+	if label == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(label, "=", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
 }

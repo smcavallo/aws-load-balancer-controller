@@ -14,13 +14,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	networking "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/aws-load-balancer-controller/apis/elbv2/v1beta1"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/annotations"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/aws/services"
-	"sigs.k8s.io/aws-load-balancer-controller/pkg/model/core"
-	shieldmodel "sigs.k8s.io/aws-load-balancer-controller/pkg/model/shield"
-	wafregionalmodel "sigs.k8s.io/aws-load-balancer-controller/pkg/model/wafregional"
-	wafv2model "sigs.k8s.io/aws-load-balancer-controller/pkg/model/wafv2"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/apis/elbv2/v1beta1"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/annotations"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/aws/services"
+	"sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/core"
+	shieldmodel "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/shield"
+	wafregionalmodel "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/wafregional"
+	wafv2model "sigs.k8s.io/aws-load-balancer-controller/v3/pkg/model/wafv2"
 )
 
 func Test_defaultModelBuildTask_buildWAFv2WebACLAssociation(t *testing.T) {
@@ -57,6 +57,31 @@ func Test_defaultModelBuildTask_buildWAFv2WebACLAssociation(t *testing.T) {
 									Namespace:   "awesome-ns",
 									Name:        "awesome-ing-1",
 									Annotations: map[string]string{},
+								},
+							},
+						},
+					},
+				},
+			},
+			args: args{
+				lbARN: core.LiteralStringToken("awesome-lb-arn"),
+			},
+			want:    nil,
+			wantErr: assert.NoError,
+		},
+		{
+			name: " wafv2-acl-arn set to empty string",
+			fields: fields{
+				ingGroup: Group{
+					Members: []ClassifiedIngress{
+						{
+							Ing: &networking.Ingress{
+								ObjectMeta: metav1.ObjectMeta{
+									Namespace: "awesome-ns",
+									Name:      "awesome-ing-0",
+									Annotations: map[string]string{
+										"alb.ingress.kubernetes.io/wafv2-acl-arn": "",
+									},
 								},
 							},
 						},
